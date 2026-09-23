@@ -1,24 +1,15 @@
 #!/usr/bin/env python3
-"""
-Стартовый код кейса «Граф денег» — HackAlem AI.
-
-Что он делает:
-  1. грузит три parquet-файла и проверяет их консистентность;
-  2. собирает направленный взвешенный граф;
-  3. считает БАЗОВЫЕ метрики узлов (степени, обороты, PageRank);
-  4. пишет три выгрузки в требуемой ТЗ схеме — с ПУСТЫМИ ролями.
-
-Чего он НЕ делает — это ваша работа:
-  * не присваивает роли,
-  * не кластеризует,
-  * не ранжирует узлы,
-  * не рисует граф.
-
-Запуск:
-    python starter.py --data ../data --out ./out
-"""
+"""Validated batch pipeline for the HackAlem money graph; hypotheses only."""
 
 import argparse
+import fcntl
+import json
+import os
+import tempfile
+import time
+import tomllib
+
+from scoring import score_nodes
 from pathlib import Path
 
 import numpy as np
@@ -210,71 +201,131 @@ def assign_clusters(G, df, random_seed=42, resolution=1.0):
 
 # ---------------------------------------------------------------- выгрузки
 
-def write_outputs(df: pd.DataFrame, out_dir: Path):
+def write_outputs(df, edges, nodes, tx, config, out_dir):
+    """Validate the entire result before publishing files from the same tables."""
+    ordered = df.sort_values(['priority_score', 'gid'], ascending=[False, True])
+    top = ordered[['gid', 'role', 'priority_score', 'evidence']].rename(columns={'evidence': 'why'}).copy()
+    top.insert(0, 'rank', range(1, len(top)+1))
+    top['why'] = [
+        f'{r.evidence}. Приоритет: охват={r.priority_seed_reach:.3f}, структура={r.priority_structure:.3f}, оборот={r.priority_volume:.3f}'
+        for r in ordered.itertuples()
+    ]
+    mapping = df.set_index('gid').cluster_id.to_dict()
+    internal = {}
+    for r in edges.itertuples():
+        if mapping[r.src] == mapping[r.dst]:
+            internal[mapping[r.src]] = internal.get(mapping[r.src], 0.0) + r.sum_kzt
+    clusters = []
+    for cluster_id, group in df.groupby('cluster_id', sort=True):
+        leaders = ordered.loc[ordered.cluster_id == cluster_id].head(5)
+        dominant = group.role.value_counts().index[0]
+        n_seed = int(group.is_seed.sum())
+        amount = float(internal.get(cluster_id, 0))
+        clusters.append(dict(cluster_id=int(cluster_id), n_nodes=len(group), n_seed=n_seed,
+                             sum_kzt_internal=amount, top_gids=[str(gid) for gid in leaders.gid],
+                             hypothesis=f'Гипотеза: сообщество с преобладанием {dominant}; узлов={len(group)}, seed={n_seed}, внутренний оборот={amount:.0f} ₸. Требует проверки.'))
+    # pandas converts missing optional ratios to JSON null; all mandatory fields
+    # have already been checked below. Gids never pass through floating point.
+    node_records = json.loads(df.to_json(orient='records', double_precision=15))
+    for record in node_records:
+        record['gid'] = str(record['gid'])
+    top_records = top.to_dict(orient='records')
+    for record in top_records:
+        record['gid'] = str(record['gid'])
+    result = dict(
+        schema_version=1,
+        meta=dict(period_start=str(tx.date.min().date()), period_end=str(tx.date.max().date()),
+                  n_nodes=len(nodes), n_edges=len(edges), n_transactions=len(tx),
+                  rules_version=config['rules_version'], config=config,
+                  limitations=['Гипотезы, не утверждения о виновности', 'Только июль 2026 и внутрибанковские операции ≥5000 KZT',
+                               'Обход исходящих до depth=4; вход seed неполон', 'Оборот не равен уникальной денежной массе',
+                               'Достижимость и близость дат не доказывают происхождение денег']),
+        nodes=node_records,
+        edges=[dict(id=f'edge:{r.src}:{r.dst}', src=str(r.src), dst=str(r.dst), sum_kzt=float(r.sum_kzt), n_tx=int(r.n_tx), depth=int(r.depth))
+               for r in edges.sort_values(['src','dst']).itertuples()],
+        clusters=clusters, top_nodes=top_records,
+    )
+    validate_outputs(df, nodes, clusters, top, result)
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    # 1. nodes_roles.csv — схема из ТЗ, роли не заполнены
-    roles = df[["gid"]].copy()
-    roles["role"] = ""            # TODO: одна из ROLES
-    roles["role_score"] = 0.0     # TODO: 0..1
-    roles["cluster_id"] = -1      # TODO: номер кластера
-    roles["priority_score"] = 0.0 # TODO: 0..1
-    roles["evidence"] = ""        # TODO: почему — с числами, до 200 символов
-    roles = roles.merge(
-        df[["gid", "in_deg", "out_deg", "in_kzt", "out_kzt", "pagerank",
-            "pass_through", "depth", "is_seed", "truncated_by_depth"]],
-        on="gid", how="left")
-    roles.to_csv(out_dir / "nodes_roles.csv", index=False)
-
-    # 2. clusters.csv — пустой каркас
-    pd.DataFrame(columns=["cluster_id", "n_nodes", "n_seed",
-                          "sum_kzt_internal", "top_gids", "hypothesis"]) \
-        .to_csv(out_dir / "clusters.csv", index=False)
-
-    # 3. top_nodes.csv — пустой каркас, нужно ≥20 строк
-    pd.DataFrame(columns=["rank", "gid", "role", "priority_score", "why"]) \
-        .to_csv(out_dir / "top_nodes.csv", index=False)
-
-    print(f"Выгрузки записаны в {out_dir}/  (роли пока пустые — это ваша задача)")
+    with tempfile.TemporaryDirectory(prefix='.analysis-', dir=out_dir.parent) as directory:
+        stage = Path(directory)
+        csv_nodes = df.copy()
+        for column in ['role_scores', 'data_warnings']:
+            csv_nodes[column] = csv_nodes[column].map(lambda value: json.dumps(value, ensure_ascii=False))
+        csv_nodes.to_csv(stage / 'nodes_roles.csv', index=False)
+        csv_clusters = pd.DataFrame(clusters)
+        csv_clusters['top_gids'] = csv_clusters.top_gids.map(json.dumps)
+        csv_clusters.to_csv(stage / 'clusters.csv', index=False)
+        top.to_csv(stage / 'top_nodes.csv', index=False)
+        (stage / 'analysis.json').write_text(json.dumps(result, ensure_ascii=False, allow_nan=False), encoding='utf-8')
+        for name in ['nodes_roles.csv', 'clusters.csv', 'top_nodes.csv', 'analysis.json']:
+            os.replace(stage / name, out_dir / name)
+    return result
 
 
-# ---------------------------------------------------------------- подсказки
+def validate_outputs(df, nodes, clusters, top, result):
+    required = ['gid', 'role', 'role_score', 'cluster_id', 'priority_score', 'evidence']
+    if df[required].isna().any().any() or df.gid.duplicated().any() or set(df.gid) != set(nodes.gid):
+        raise ValueError('Output nodes do not cover input or mandatory values are missing')
+    if not df.role.isin(ROLES).all():
+        raise ValueError('Unknown output role')
+    for column in ['role_score', 'priority_score']:
+        if not np.isfinite(df[column]).all() or not df[column].between(0,1).all():
+            raise ValueError(f'Invalid output score: {column}')
+    if not df.evidence.str.len().between(1,200).all() or not df.evidence.str.contains(r'\d').all():
+        raise ValueError('Evidence must contain numbers and at most 200 characters')
+    if ((df.is_seed | df.truncated_by_depth) & (df.role == 'terminal')).any() or (df.is_seed & (df.role == 'transit')).any():
+        raise ValueError('Incomplete observations used for balance role')
+    if set(df.cluster_id) != {c['cluster_id'] for c in clusters}:
+        raise ValueError('Cluster IDs disagree')
+    for cluster in clusters:
+        group = df[df.cluster_id == cluster['cluster_id']]
+        if len(group) != cluster['n_nodes'] or int(group.is_seed.sum()) != cluster['n_seed'] or not set(cluster['top_gids']) <= set(group.gid.astype(str)):
+            raise ValueError('Invalid cluster summary')
+    expected = df.sort_values(['priority_score','gid'], ascending=[False,True])
+    if list(top.gid) != list(expected.gid) or list(top['rank']) != list(range(1,len(df)+1)):
+        raise ValueError('Invalid top order or ranks')
+    if not np.isfinite(df.select_dtypes(include='number').drop(columns=['pass_through', 'in_concentration', 'out_concentration'])).all().all():
+        raise ValueError('Non-finite required numeric feature')
+    json.dumps(result, allow_nan=False)
 
-def hints(G: nx.DiGraph, df: pd.DataFrame):
-    """Куда смотреть дальше. Ответов здесь нет — только направления."""
-    print("\nС ЧЕГО НАЧАТЬ")
-    print("-" * 64)
-    print(f"  узлов, получающих от 3+ разных плательщиков : {(df.in_deg >= 3).sum()}")
-    print(f"  узлов, рассылающих на 10+ получателей       : {(df.out_deg >= 10).sum()}")
-    print(f"  узлов и с входом, и с выходом               : {((df.in_deg > 0) & (df.out_deg > 0)).sum()}")
-    print(f"  узлов, обрезанных 4-м коленом               : {df.truncated_by_depth.sum()}  <- разберитесь")
-    print(f"  слабосвязных компонент                      : {nx.number_weakly_connected_components(G)}")
-    print("""
-  Вопросы, на которые стоит ответить метриками:
-    * чем «деньги пришли и остались» отличается от «пришли и ушли дальше»?
-    * что важнее для роли — количество плательщиков или сумма?
-    * узел собирает средства от нескольких SEED — это случайность или структура?
-    * если убрать узел, сеть распадётся или переживёт?
 
-  Полезное в networkx: pagerank, hits, betweenness_centrality,
-  community.louvain_communities, simple_cycles, all_simple_paths.
-  Не забудьте: граф НАПРАВЛЕННЫЙ и ВЗВЕШЕННЫЙ.
-""")
+def analyze(data_dir, out_dir, config_path):
+    start = time.perf_counter()
+    with Path(config_path).open('rb') as stream:
+        config = tomllib.load(stream)
+    if set(config['role_order']) != set(ROLES) or len(config['role_order']) != len(ROLES):
+        raise ValueError('role_order must contain every role once')
+    weights = config['priority_weights']
+    if set(weights) != {'seed_reach','structure','volume'} or any(v < 0 for v in weights.values()) or not np.isclose(sum(weights.values()),1):
+        raise ValueError('Priority weights must be nonnegative and sum to one')
+    out_dir = Path(out_dir).resolve()
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    # Retain the lock file: unlinking it can let concurrent processes lock different inodes.
+    with (out_dir.parent / f'.{out_dir.name}.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError('Output directory is already in use') from exc
+        edges, nodes, tx = load(Path(data_dir))
+        sanity_check(edges, nodes, tx)
+        graph = build_graph(edges, nodes)
+        features = extended_features(graph, basic_features(graph, nodes), tx)
+        features = assign_clusters(graph, features, config['random_seed'], config['resolution'])
+        scored = score_nodes(features, config)
+        result = write_outputs(scored, edges, nodes, tx, config, out_dir)
+    print(f'Analysis complete: {len(nodes)} nodes, {len(result["clusters"])} clusters, {time.perf_counter()-start:.3f} seconds')
+    return result
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default="../data", help="папка с parquet-файлами")
-    ap.add_argument("--out", default="./out", help="куда писать выгрузки")
-    a = ap.parse_args()
-
-    edges, nodes, tx = load(Path(a.data))
-    sanity_check(edges, nodes, tx)
-    G = build_graph(edges, nodes)
-    df = assign_clusters(G, extended_features(G, basic_features(G, nodes), tx))
-    write_outputs(df, Path(a.out))
-    hints(G, df)
+    ap.add_argument('--data', default='../data')
+    ap.add_argument('--out', default='./out')
+    ap.add_argument('--config', default=str(Path(__file__).resolve().parents[2] / 'config.toml'))
+    args = ap.parse_args()
+    analyze(args.data, args.out, args.config)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

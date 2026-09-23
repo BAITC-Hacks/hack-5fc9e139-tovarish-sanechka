@@ -13,6 +13,7 @@ __pycache__/
 case/starter/out/
 .pytest_cache/
 out/
+.*.lock
 web/node_modules/
 web/dist/
 web/test-results/
