@@ -17,6 +17,9 @@ uv run python case/starter/starter.py --data case/data --out out --config config
 На выходе — заполненные `nodes_roles.csv`, `clusters.csv`, `top_nodes.csv`
 и `analysis.json` с `schema_version=3`. На исходном датасете роли присваиваются
 всем 2 248 узлам, включая 19 изолятов. HTTP-сервер эта команда не запускает.
+Настройки Alem и `.env` для расчёта не требуются. Если каталог `out/`
+уже занят нативным сервером, задайте отдельный путь, например `--out out-check`.
+Готовые файлы в `submission/` этот запуск не обновляет.
 
 Для приложения целиком используйте Docker Compose или `run.py` по
 [корневому README](../../README.md#4-установка-запуск-и-проверка).
