@@ -35,7 +35,11 @@ def load_settings(root: Path, environ=None):
     values = {name: env[name] for name in names if name in env}
     path = root / '.env'
     if path.is_file():
-        for line in path.read_text(encoding='utf-8').splitlines():
+        try:
+            lines = path.read_text(encoding='utf-8').splitlines()
+        except (OSError, UnicodeError) as error:
+            raise AssistantError('Не удалось прочитать настройки Alem из .env.', 503) from error
+        for line in lines:
             match = re.match(r'^\s*(?:export\s+)?(ALEM_API_KEY|ALEM_CHAT_URL|ALEM_MODEL)\s*=(.*)$', line)
             if not match or match[1] in values:
                 continue
@@ -48,7 +52,10 @@ def load_settings(root: Path, environ=None):
             values[match[1]] = parts[0] if parts else ''
     settings = AlemSettings(*(values.get(name, '') for name in names))
     if settings.url:
-        parsed = urlsplit(settings.url)
+        try:
+            parsed = urlsplit(settings.url)
+        except ValueError as error:
+            raise AssistantError('Некорректный адрес API в настройках Alem.', 503) from error
         if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
             raise AssistantError('ALEM_CHAT_URL должен быть полным HTTPS-адресом API без учётных данных.', 503)
     return settings

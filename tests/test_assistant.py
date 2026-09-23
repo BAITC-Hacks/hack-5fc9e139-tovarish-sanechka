@@ -81,6 +81,10 @@ def test_env_is_data_and_process_environment_has_precedence(tmp_path):
     assert load_settings(tmp_path, {'ALEM_API_KEY': ''}).enabled is False
     (tmp_path/'.env').write_text('ALEM_CHAT_URL=http://example.test\n')
     with pytest.raises(AssistantError, match='HTTPS'): load_settings(tmp_path, {})
+    (tmp_path/'.env').write_text('ALEM_CHAT_URL=https://[broken\n')
+    with pytest.raises(AssistantError, match='адрес'): load_settings(tmp_path, {})
+    (tmp_path/'.env').write_bytes(b'\xff')
+    with pytest.raises(AssistantError, match='прочитать'): load_settings(tmp_path, {})
 
 
 @pytest.mark.parametrize(('error', 'message'), [
