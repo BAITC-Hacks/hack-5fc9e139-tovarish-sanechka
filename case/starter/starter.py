@@ -39,47 +39,78 @@ def load(data_dir: Path):
 
 
 def sanity_check(edges, nodes, tx):
-    """Проверки, которые стоит пройти до того, как строить модель."""
-    print("=" * 64)
-    print("ПРОВЕРКА ДАННЫХ")
-    print("=" * 64)
-    print(f"  узлов в nodes.parquet : {len(nodes):>6}")
-    print(f"  рёбер                 : {len(edges):>6}")
-    print(f"  транзакций            : {len(tx):>6}")
-    print(f"  seed-клиентов         : {int(nodes.is_seed.sum()):>6}")
-    print(f"  оборот, KZT           : {edges.sum_kzt.sum():>14,.0f}")
-    print(f"  период                : {tx.date.min().date()} — {tx.date.max().date()}")
-
-    # транзакции должны складываться в рёбра
+    """Validate the declared dataset before computing or publishing anything."""
+    schemas = {
+        "nodes": (nodes, ["gid", "depth", "is_seed"]),
+        "edges": (edges, ["src", "dst", "sum_kzt", "n_tx", "depth"]),
+        "transactions": (tx, ["src", "dst", "date", "sum_kzt"]),
+    }
+    for name, (frame, columns) in schemas.items():
+        if not set(columns) <= set(frame.columns):
+            raise ValueError(f"{name}: missing required columns")
+        if frame[columns].isna().any().any():
+            raise ValueError(f"{name}: null values")
+        integer_columns = [c for c in columns if c in {"gid", "src", "dst", "depth", "n_tx"}]
+        for column in integer_columns:
+            if not pd.api.types.is_integer_dtype(frame[column]) or pd.api.types.is_bool_dtype(frame[column]):
+                raise ValueError(f"{name}.{column}: expected integer dtype")
+        if "sum_kzt" in columns:
+            amounts = frame.sum_kzt
+            if not pd.api.types.is_numeric_dtype(amounts) or not np.isfinite(amounts).all():
+                raise ValueError(f"{name}: amounts must be finite numbers")
+            if (amounts < 5000).any():
+                raise ValueError(f"{name}: amount below dataset threshold 5000 KZT")
+    if nodes.empty or edges.empty or tx.empty:
+        raise ValueError("Dataset must contain nodes, edges and transactions")
+    if nodes.gid.duplicated().any():
+        raise ValueError("nodes: duplicate gid")
+    if edges.duplicated(["src", "dst"]).any():
+        raise ValueError("edges: duplicate directed pair")
+    if not pd.api.types.is_bool_dtype(nodes.is_seed):
+        raise ValueError("nodes.is_seed: expected boolean dtype")
+    if not nodes.depth.between(0, 4).all() or not edges.depth.between(1, 4).all():
+        raise ValueError("depth outside dataset bounds")
+    if not (nodes.is_seed == (nodes.depth == 0)).all():
+        raise ValueError("seed must agree with depth=0")
+    if (edges.n_tx <= 0).any():
+        raise ValueError("edges.n_tx must be positive")
+    gids = set(nodes.gid)
+    for name, frame in [("edges", edges), ("transactions", tx)]:
+        if not (set(frame.src) | set(frame.dst)) <= gids:
+            raise ValueError(f"{name}: endpoint missing from nodes")
+    if not pd.api.types.is_datetime64_any_dtype(tx.date):
+        raise ValueError("transactions.date: expected parsed dates")
+    if not tx.date.between(pd.Timestamp("2026-07-01"), pd.Timestamp("2026-07-31")).all():
+        raise ValueError("transactions.date outside July 2026")
+    if not (tx.date == tx.date.dt.normalize()).all():
+        raise ValueError("transactions.date must have day precision")
+    # Repeated transactions are observations, not duplicates to discard.
     agg = tx.groupby(["src", "dst"]).agg(s=("sum_kzt", "sum"), c=("sum_kzt", "size")).reset_index()
-    m = edges.merge(agg, on=["src", "dst"], how="outer", indicator=True)
-    assert (m._merge == "both").all(), "edges и transactions не сходятся по парам"
-    print("  edges == transactions : OK")
-
-    # узлы без единого ребра
-    in_edges = set(edges.src) | set(edges.dst)
-    orphans = set(nodes.gid) - in_edges
-    print(f"\n  ВНИМАНИЕ: {len(orphans)} узлов нет ни в одном ребре "
-          f"(из них seed: {len(orphans & set(nodes[nodes.is_seed].gid))})")
-    print("  → они всё равно должны попасть в nodes_roles.csv")
-    print("=" * 64, "\n")
-    return orphans
+    merged = edges.merge(agg, on=["src", "dst"], how="outer", indicator=True, validate="one_to_one")
+    if not (merged._merge == "both").all():
+        raise ValueError("edges and transactions disagree on directed pairs")
+    if not np.isclose(merged.sum_kzt, merged.s, rtol=1e-10, atol=0.01).all():
+        raise ValueError("edges and transactions disagree on amounts")
+    if not (merged.n_tx == merged.c).all():
+        raise ValueError("edges and transactions disagree on transaction counts")
+    return gids - (set(edges.src) | set(edges.dst))
 
 
 # ---------------------------------------------------------------- граф
 
-def build_graph(edges) -> nx.DiGraph:
+def build_graph(edges, nodes) -> nx.DiGraph:
     """Направленный граф. sum_kzt — вес ребра, n_tx — количество переводов."""
     G = nx.DiGraph()
-    for r in edges.itertuples(index=False):
+    G.add_nodes_from(int(gid) for gid in sorted(nodes.gid))
+    for r in edges.sort_values(["src", "dst"]).itertuples(index=False):
         G.add_edge(r.src, r.dst, sum_kzt=float(r.sum_kzt), n_tx=int(r.n_tx), depth=int(r.depth))
     return G
 
 
 def basic_features(G: nx.DiGraph, nodes: pd.DataFrame) -> pd.DataFrame:
     """Базовые метрики. Это старт, а не финиш — добавляйте свои."""
-    in_deg = dict(G.in_degree())
-    out_deg = dict(G.out_degree())
+    in_deg = {gid: sum(other != gid for other in G.predecessors(gid)) for gid in G}
+    out_deg = {gid: sum(other != gid for other in G.successors(gid)) for gid in G}
     in_kzt = dict(G.in_degree(weight="sum_kzt"))
     out_kzt = dict(G.out_degree(weight="sum_kzt"))
     in_tx = dict(G.in_degree(weight="n_tx"))
@@ -166,7 +197,7 @@ def main():
 
     edges, nodes, tx = load(Path(a.data))
     sanity_check(edges, nodes, tx)
-    G = build_graph(edges)
+    G = build_graph(edges, nodes)
     df = basic_features(G, nodes)
     write_outputs(df, Path(a.out))
     hints(G, df)

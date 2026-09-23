@@ -11,3 +11,9 @@ __MACOSX/
 __pycache__/
 *.py[cod]
 case/starter/out/
+.pytest_cache/
+out/
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
