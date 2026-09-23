@@ -223,6 +223,55 @@ def representative_seed_paths(G, nodes):
             for gid, is_seed in nodes[["gid", "is_seed"]].itertuples(index=False, name=None)}
 
 
+def summarize_clusters(df, edges, ordered):
+    mapping = df.set_index('gid').cluster_id.to_dict()
+    internal, external_in, external_out = {}, {}, {}
+    for edge in edges.itertuples():
+        source, target = mapping[edge.src], mapping[edge.dst]
+        if source == target:
+            internal[source] = internal.get(source, 0.0) + edge.sum_kzt
+        else:
+            external_out[source] = external_out.get(source, 0.0) + edge.sum_kzt
+            external_in[target] = external_in.get(target, 0.0) + edge.sum_kzt
+    signals = {
+        'consolidator': 'сбор', 'transit': 'транзит',
+        'distributor': 'распределение', 'terminal': 'наблюдаемое удержание',
+        'coordinator': 'связующая роль',
+    }
+    clusters = []
+    for cluster_id, group in df.groupby('cluster_id', sort=True):
+        leaders = ordered.loc[ordered.cluster_id == cluster_id].head(5)
+        n_seed = int(group.is_seed.sum())
+        incoming = float(external_in.get(cluster_id, 0))
+        outgoing = float(external_out.get(cluster_id, 0))
+        if len(group) == 1 and int(group[['in_tx', 'out_tx']].sum(axis=1).iloc[0]) == 0:
+            kind = 'исходный узел' if n_seed else 'узел'
+            hypothesis = f'Гипотеза о функции не определена: изолированный {kind} без переводов в выборке.'
+        else:
+            counts = group.role.value_counts()
+            signal = next((role for role in sorted(signals, key=lambda role: (-counts.get(role, 0), ROLES.index(role)))
+                           if counts.get(role, 0)), None)
+            if incoming > outgoing:
+                purpose = 'получающий фрагмент'
+            elif outgoing > incoming:
+                purpose = 'передающий фрагмент'
+            elif incoming == outgoing == 0:
+                purpose = 'обособленный фрагмент'
+            else:
+                purpose = 'фрагмент с равными внешними потоками'
+            n_with_role = sum(int(counts.get(role, 0)) for role in signals)
+            role_detail = f'; чаще — {signals[signal]} ({int(counts[signal])} узл.)' if signal else ''
+            incoming_text = f'{incoming:,.0f}'.replace(',', ' ')
+            outgoing_text = f'{outgoing:,.0f}'.replace(',', ' ')
+            hypothesis = (f'Гипотеза: {purpose}. Внешний вход {incoming_text} ₸, '
+                          f'выход {outgoing_text} ₸; {n_seed} исходных узлов, '
+                          f'{n_with_role} узлов с выраженной ролью{role_detail}. Только наблюдаемый граф.')
+        clusters.append(dict(cluster_id=int(cluster_id), n_nodes=len(group), n_seed=n_seed,
+                             sum_kzt_internal=float(internal.get(cluster_id, 0)),
+                             top_gids=[str(gid) for gid in leaders.gid], hypothesis=hypothesis))
+    return clusters
+
+
 # ---------------------------------------------------------------- выгрузки
 
 def write_outputs(df, edges, nodes, tx, config, out_dir):
@@ -234,20 +283,7 @@ def write_outputs(df, edges, nodes, tx, config, out_dir):
         f'{r.evidence}. Приоритет: охват={r.priority_seed_reach:.3f}, структура={r.priority_structure:.3f}, оборот={r.priority_volume:.3f}'
         for r in ordered.itertuples()
     ]
-    mapping = df.set_index('gid').cluster_id.to_dict()
-    internal = {}
-    for r in edges.itertuples():
-        if mapping[r.src] == mapping[r.dst]:
-            internal[mapping[r.src]] = internal.get(mapping[r.src], 0.0) + r.sum_kzt
-    clusters = []
-    for cluster_id, group in df.groupby('cluster_id', sort=True):
-        leaders = ordered.loc[ordered.cluster_id == cluster_id].head(5)
-        dominant = group.role.value_counts().index[0]
-        n_seed = int(group.is_seed.sum())
-        amount = float(internal.get(cluster_id, 0))
-        clusters.append(dict(cluster_id=int(cluster_id), n_nodes=len(group), n_seed=n_seed,
-                             sum_kzt_internal=amount, top_gids=[str(gid) for gid in leaders.gid],
-                             hypothesis=f'Гипотеза: сообщество с преобладанием {dominant}; узлов={len(group)}, seed={n_seed}, внутренний оборот={amount:.0f} ₸. Требует проверки.'))
+    clusters = summarize_clusters(df, edges, ordered)
     # pandas converts missing optional ratios to JSON null; all mandatory fields
     # have already been checked below. Gids never pass through floating point.
     node_records = json.loads(df.to_json(orient='records', double_precision=15))

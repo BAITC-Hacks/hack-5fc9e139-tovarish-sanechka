@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from starter import basic_features, build_graph, load, representative_seed_paths, sanity_check
+from starter import basic_features, build_graph, load, representative_seed_paths, sanity_check, summarize_clusters
 
 
 @pytest.fixture
@@ -102,6 +102,27 @@ def test_representative_paths_are_directed_shortest_and_stable():
     reversed_edges.add_nodes_from(nodes.gid)
     reversed_edges.add_edges_from(reversed(list(graph.edges)))
     assert representative_seed_paths(reversed_edges, nodes) == paths
+
+
+def test_cluster_hypotheses_use_external_flows_and_isolates():
+    nodes = pd.DataFrame([
+        {'gid': 1, 'cluster_id': 0, 'role': 'distributor', 'is_seed': True, 'in_tx': 0, 'out_tx': 2},
+        {'gid': 2, 'cluster_id': 0, 'role': 'peripheral', 'is_seed': False, 'in_tx': 1, 'out_tx': 1},
+        {'gid': 3, 'cluster_id': 1, 'role': 'peripheral', 'is_seed': False, 'in_tx': 1, 'out_tx': 0},
+        {'gid': 4, 'cluster_id': 2, 'role': 'peripheral', 'is_seed': True, 'in_tx': 0, 'out_tx': 0},
+    ])
+    edges = pd.DataFrame([
+        {'src': 1, 'dst': 2, 'sum_kzt': 10000.},
+        {'src': 1, 'dst': 3, 'sum_kzt': 5000.},
+    ])
+    clusters = summarize_clusters(nodes, edges, nodes)
+    assert [c['sum_kzt_internal'] for c in clusters] == [10000., 0., 0.]
+    assert 'передающий фрагмент' in clusters[0]['hypothesis']
+    assert 'чаще — распределение (1 узл.)' in clusters[0]['hypothesis']
+    assert 'выход 5 000 ₸' in clusters[0]['hypothesis']
+    assert 'получающий фрагмент' in clusters[1]['hypothesis']
+    assert 'Внешний вход 5 000 ₸' in clusters[1]['hypothesis']
+    assert 'изолированный исходный узел' in clusters[2]['hypothesis']
 
 
 def test_daily_proximity_does_not_count_outgoing_volume_twice():
