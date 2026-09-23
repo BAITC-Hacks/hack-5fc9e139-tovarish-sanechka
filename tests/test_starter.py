@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from starter import basic_features, build_graph, load, sanity_check
+from starter import basic_features, build_graph, load, representative_seed_paths, sanity_check
 
 
 @pytest.fixture
@@ -86,6 +86,22 @@ def test_reachability_counts_distinct_seeds_and_excludes_self():
     graph = build_graph(edges, nodes)
     features = extended_features(graph, basic_features(graph, nodes), tx).set_index('gid')
     assert features.reachable_seed_count.to_dict() == {1: 0, 2: 1, 3: 0, 4: 2}
+
+
+def test_representative_paths_are_directed_shortest_and_stable():
+    nodes = pd.DataFrame({'gid': [1, 2, 3, 4, 5, 6, 7],
+                          'is_seed': [True, True, True, False, False, False, False]})
+    graph = nx.DiGraph()
+    graph.add_nodes_from(nodes.gid)
+    graph.add_edges_from([(1, 5), (1, 4), (2, 4), (5, 7), (4, 7), (1, 2),
+                          (4, 1), (7, 4)])
+    paths = representative_seed_paths(graph, nodes)
+    assert paths == {1: [2, 4, 1], 2: [1, 2], 3: [3], 4: [1, 4],
+                     5: [1, 5], 6: [], 7: [1, 4, 7]}
+    reversed_edges = nx.DiGraph()
+    reversed_edges.add_nodes_from(nodes.gid)
+    reversed_edges.add_edges_from(reversed(list(graph.edges)))
+    assert representative_seed_paths(reversed_edges, nodes) == paths
 
 
 def test_daily_proximity_does_not_count_outgoing_volume_twice():

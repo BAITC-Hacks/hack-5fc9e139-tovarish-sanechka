@@ -53,6 +53,20 @@ def test_competing_role_reduces_confidence(config):
     assert competing.role_scores['consolidator'] > 0
 
 
+def test_next_check_matches_the_observation_gap(config):
+    cases = pd.concat([
+        observed(truncated_by_depth=True),
+        observed(is_seed=True),
+        observed(),
+        observed(out_deg=0, out_kzt=0., pass_through=0.),
+    ], ignore_index=True)
+    result = score_nodes(cases, config)
+    assert '4-го колена' in result.next_check.iloc[0]
+    assert 'входящие' in result.next_check.iloc[1]
+    assert 'хронологию' in result.next_check.iloc[2]
+    assert 'соседние периоды' in result.next_check.iloc[3]
+
+
 def test_zero_and_constant_normalization():
     assert list(normalize(pd.Series([0.,0.]))) == [0.,0.]
     assert list(normalize(pd.Series([5.,5.]))) == [1.,1.]
@@ -78,6 +92,9 @@ def test_exports_contract_and_repeatability(tmp_path):
     assert nodes[['gid','role','role_score','priority_score','cluster_id','evidence']].notna().all().all()
     assert nodes.role_score.between(0,1).all() and nodes.priority_score.between(0,1).all()
     assert nodes.evidence.str.len().max() <= 200
+    assert nodes.next_check.str.len().gt(0).all()
+    assert all(isinstance(n['seed_path_gids'], list) for n in result['nodes'])
+    assert all(n['seed_path_gids'][-1] == n['gid'] for n in result['nodes'])
     assert not nodes.loc[nodes.truncated_by_depth,'role'].eq('terminal').any()
     assert not nodes.loc[nodes.is_seed,'role'].isin(['terminal','transit']).any()
     assert sum(c['n_nodes'] for c in result['clusters']) == 2248

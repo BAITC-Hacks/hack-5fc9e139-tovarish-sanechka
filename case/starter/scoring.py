@@ -53,6 +53,16 @@ def score_nodes(df, config):
     df['role_score'] = confidence
     df['role_scores'] = alternatives
     df['evidence'] = explanations
+    df['next_check'] = [
+        'Запросить исходящие переводы за пределами 4-го колена и соседние периоды.'
+        if row.truncated_by_depth else
+        'Запросить полные входящие переводы исходного клиента за июль 2026.'
+        if row.is_seed else
+        'Запросить хронологию операций и остатки счёта вокруг дней входа и выхода.'
+        if role == 'transit' else
+        'Запросить полные входящие и исходящие переводы за соседние периоды.'
+        for row, role in zip(df.itertuples(), roles)
+    ]
     weights = config['priority_weights']
     df['priority_seed_reach'] = normalize(df.reachable_seed_count) * weights['seed_reach']
     df['priority_structure'] = (normalize(df.betweenness) + normalize(df.in_deg+df.out_deg))/2 * weights['structure']

@@ -2,6 +2,7 @@
 """Validated batch pipeline for the HackAlem money graph; hypotheses only."""
 
 import argparse
+from collections import deque
 import fcntl
 import json
 import os
@@ -199,6 +200,29 @@ def assign_clusters(G, df, random_seed=42, resolution=1.0):
     return df
 
 
+def representative_seed_paths(G, nodes):
+    """Shortest observed directed path from a distinct seed when possible."""
+    best = {}
+    seeds = sorted(int(gid) for gid in nodes.loc[nodes.is_seed, "gid"])
+    for seed in seeds:
+        paths = {seed: (seed,)}
+        pending = deque([seed])
+        while pending:
+            current = pending.popleft()
+            for neighbor in sorted(G.successors(current)):
+                if neighbor not in paths:
+                    paths[neighbor] = paths[current] + (neighbor,)
+                    pending.append(neighbor)
+        for gid, path in paths.items():
+            if gid == seed:
+                continue
+            candidate = (len(path), seed, path)
+            if gid not in best or candidate < best[gid]:
+                best[gid] = candidate
+    return {int(gid): list(best[gid][2]) if gid in best else ([int(gid)] if is_seed else [])
+            for gid, is_seed in nodes[["gid", "is_seed"]].itertuples(index=False, name=None)}
+
+
 # ---------------------------------------------------------------- выгрузки
 
 def write_outputs(df, edges, nodes, tx, config, out_dir):
@@ -229,6 +253,7 @@ def write_outputs(df, edges, nodes, tx, config, out_dir):
     node_records = json.loads(df.to_json(orient='records', double_precision=15))
     for record in node_records:
         record['gid'] = str(record['gid'])
+        record['seed_path_gids'] = [str(gid) for gid in record['seed_path_gids']]
     top_records = top.to_dict(orient='records')
     for record in top_records:
         record['gid'] = str(record['gid'])
@@ -252,6 +277,9 @@ def write_outputs(df, edges, nodes, tx, config, out_dir):
         csv_nodes = df.copy()
         for column in ['role_scores', 'data_warnings']:
             csv_nodes[column] = csv_nodes[column].map(lambda value: json.dumps(value, ensure_ascii=False))
+        csv_nodes['seed_path_gids'] = csv_nodes.seed_path_gids.map(
+            lambda path: json.dumps([str(gid) for gid in path])
+        )
         csv_nodes.to_csv(stage / 'nodes_roles.csv', index=False)
         csv_clusters = pd.DataFrame(clusters)
         csv_clusters['top_gids'] = csv_clusters.top_gids.map(json.dumps)
@@ -264,9 +292,12 @@ def write_outputs(df, edges, nodes, tx, config, out_dir):
 
 
 def validate_outputs(df, nodes, clusters, top, result):
-    required = ['gid', 'role', 'role_score', 'cluster_id', 'priority_score', 'evidence']
+    required = ['gid', 'role', 'role_score', 'cluster_id', 'priority_score',
+                'evidence', 'next_check', 'seed_path_gids']
     if df[required].isna().any().any() or df.gid.duplicated().any() or set(df.gid) != set(nodes.gid):
         raise ValueError('Output nodes do not cover input or mandatory values are missing')
+    if not df.next_check.str.len().gt(0).all():
+        raise ValueError('Next check must be described for every node')
     if not df.role.isin(ROLES).all():
         raise ValueError('Unknown output role')
     for column in ['role_score', 'priority_score']:
@@ -287,6 +318,22 @@ def validate_outputs(df, nodes, clusters, top, result):
         raise ValueError('Invalid top order or ranks')
     if not np.isfinite(df.select_dtypes(include='number').drop(columns=['pass_through', 'in_concentration', 'out_concentration'])).all().all():
         raise ValueError('Non-finite required numeric feature')
+    seed_ids = set(nodes.loc[nodes.is_seed, 'gid'].astype(str))
+    edge_pairs = {(edge['src'], edge['dst']) for edge in result['edges']}
+    for node in result['nodes']:
+        path = node['seed_path_gids']
+        if not isinstance(path, list) or not all(isinstance(gid, str) for gid in path):
+            raise ValueError('Invalid seed path identifiers')
+        if not path:
+            if node['is_seed'] or node['reachable_seed_count']:
+                raise ValueError('Reachable node has no seed path')
+            continue
+        if path[-1] != node['gid'] or path[0] not in seed_ids:
+            raise ValueError('Seed path has invalid endpoints')
+        if len(path) == 1 and not node['is_seed']:
+            raise ValueError('Non-seed has a zero-length path')
+        if len(path) > 1 and not all(pair in edge_pairs for pair in zip(path, path[1:])):
+            raise ValueError('Seed path contains a missing directed edge')
     json.dumps(result, allow_nan=False)
 
 
@@ -313,6 +360,8 @@ def analyze(data_dir, out_dir, config_path, on_ready=None):
         features = extended_features(graph, basic_features(graph, nodes), tx)
         features = assign_clusters(graph, features, config['random_seed'], config['resolution'])
         scored = score_nodes(features, config)
+        paths = representative_seed_paths(graph, nodes)
+        scored['seed_path_gids'] = scored.gid.map(paths)
         result = write_outputs(scored, edges, nodes, tx, config, out_dir)
         print(f'Analysis complete: {len(nodes)} nodes, {len(result["clusters"])} clusters, {time.perf_counter()-start:.3f} seconds', flush=True)
         if on_ready is not None:
