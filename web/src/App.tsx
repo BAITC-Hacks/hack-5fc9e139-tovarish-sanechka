@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { GraphView } from "./GraphView";
+import { ConvergenceSearch } from "./ConvergenceSearch";
 import {
   validateAnalysis,
   labels,
@@ -38,6 +39,7 @@ function Details({
   onSelect: (id: string) => void;
 }) {
   const cluster = data.clusters.find((c) => c.cluster_id === node.cluster_id)!;
+  const rank = data.top_nodes.find((item) => item.gid === node.gid)!.rank;
   return (
     <section className="details panel" aria-labelledby="node-title">
       <div className="section-head">
@@ -66,6 +68,10 @@ function Details({
       </div>
       <dl className="facts">
         <div>
+          <dt>Место в приоритете</dt>
+          <dd>№ {rank} из {number(data.nodes.length)}</dd>
+        </div>
+        <div>
           <dt>Приоритет проверки</dt>
           <dd>{percent(node.priority_score)}</dd>
         </div>
@@ -85,6 +91,14 @@ function Details({
           </dd>
         </div>
       </dl>
+      <div className="priority-parts">
+        <strong>Вклад в приоритет</strong>
+        <dl>
+          <div><dt>Охват</dt><dd>{percent(node.priority_seed_reach)}</dd></div>
+          <div><dt>Структура</dt><dd>{percent(node.priority_structure)}</dd></div>
+          <div><dt>Оборот</dt><dd>{percent(node.priority_volume)}</dd></div>
+        </dl>
+      </div>
       <ul className="warnings">
         {node.data_warnings.map((w) => (
           <li key={w}>{warnings[w] ?? w}</li>
@@ -156,23 +170,6 @@ function Details({
           Скоры эвристические, не вероятности. Близость дат не доказывает
           движение тех же денег.
         </p>
-      </details>
-      <details>
-        <summary>Из чего складывается приоритет</summary>
-        <dl className="facts">
-          <div>
-            <dt>Охват исходных узлов</dt>
-            <dd>{percent(node.priority_seed_reach)}</dd>
-          </div>
-          <div>
-            <dt>Структура связей</dt>
-            <dd>{percent(node.priority_structure)}</dd>
-          </div>
-          <div>
-            <dt>Оборот</dt>
-            <dd>{percent(node.priority_volume)}</dd>
-          </div>
-        </dl>
       </details>
       <details>
         <summary>
@@ -358,6 +355,7 @@ export default function App() {
         <button type="submit">Найти</button>
         <p role="status">{notice}</p>
       </form>
+      <ConvergenceSearch data={data} selected={selected} onSelect={choose} />
       <div className="workspace">
         <section className="list panel" aria-labelledby="priority-title">
           <div className="section-head">

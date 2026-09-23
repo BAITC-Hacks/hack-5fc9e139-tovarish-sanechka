@@ -154,3 +154,55 @@ test('seed path, next request and resilience stay usable on mobile', async ({pag
   await page.getByRole('button', {name: 'Найти', exact: true}).click();
   await expect(page.locator('.path-details')).toContainText('Путь от другого исходного узла');
 });
+
+test('common downstream search explains candidates from multiple seeds', async ({page, request}) => {
+  const data = await (await request.get('/analysis.json')).json();
+  const first = '100000003016635100';
+  const second = '100000004269433100';
+  const target = '100000008346837100';
+  const isolate = data.nodes.find((n: any) => n.is_seed && n.in_tx + n.out_tx === 0).gid;
+  await page.goto('/');
+  const input = page.getByLabel('Исходные gid');
+  const submit = page.getByRole('button', {name: 'Найти общие узлы'});
+
+  await input.fill(`${first}, ${second}`);
+  await submit.click();
+  await expect(page.locator('.candidate-list li').first()).toContainText(target);
+  await page.locator('.candidate-list button').filter({hasText: target}).click();
+  await expect(page.locator('.node-id')).toHaveText(target);
+  await expect(page.locator('.details .facts').first()).toContainText('№ 2 из 2 248');
+  await expect(page.locator('.priority-parts')).toContainText('Охват');
+  await expect(page.locator('.source-path')).toHaveCount(2);
+  await expect(page.locator('.source-path').first()).toContainText(first);
+  await expect(page.locator('.source-path').last()).toContainText(second);
+  await expect(page.locator('.source-path').first()).toContainText('шагов: 2');
+  await expect(page.locator('.source-path').last()).toContainText('шагов: 4');
+  await expect(page.locator('.source-path').first()).toContainText(target);
+  await expect(page.locator('.source-path').last()).toContainText(target);
+  await expect(page.locator('.source-path li').first()).toContainText('₸');
+  await page.locator('.gid-button').first().click();
+  await expect(page.locator('.convergence-paths')).toHaveCount(0);
+  await page.locator('.candidate-list button').filter({hasText: target}).click();
+  await page.setViewportSize({width: 390, height: 844});
+  await expect.poll(() => page.evaluate(
+    () => document.documentElement.scrollWidth <= innerWidth,
+  )).toBeTruthy();
+
+  await input.fill(`${first}, ${first}`);
+  await submit.click();
+  await expect(page.locator('.convergence [role="alert"]')).toContainText('не должны повторяться');
+  await expect(page.locator('.candidate-list')).toHaveCount(0);
+  await input.fill(`${first}, ${target}`);
+  await submit.click();
+  await expect(page.locator('.convergence [role="alert"]')).toContainText('не найден среди исходных');
+  await input.fill(first);
+  await submit.click();
+  await expect(page.locator('.convergence [role="alert"]')).toContainText('от 2 до 5');
+
+  await input.fill(`${first}\n${isolate}`);
+  await submit.click();
+  await expect(page.locator('.convergence .empty')).toContainText('Общих новых узлов');
+  await expect.poll(() => page.evaluate(
+    () => document.documentElement.scrollWidth <= innerWidth,
+  )).toBeTruthy();
+});
