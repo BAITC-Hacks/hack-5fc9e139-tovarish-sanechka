@@ -5,7 +5,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from starter import basic_features, build_graph, load, representative_seed_paths, sanity_check, summarize_clusters
+from starter import (basic_features, build_graph, load, network_resilience,
+                     representative_seed_paths, sanity_check, summarize_clusters)
 
 
 @pytest.fixture
@@ -123,6 +124,27 @@ def test_cluster_hypotheses_use_external_flows_and_isolates():
     assert 'получающий фрагмент' in clusters[1]['hypothesis']
     assert 'Внешний вход 5 000 ₸' in clusters[1]['hypothesis']
     assert 'изолированный исходный узел' in clusters[2]['hypothesis']
+
+
+def test_resilience_uses_largest_component_and_fixed_random_control():
+    graph = nx.DiGraph()
+    graph.add_edges_from((1, gid) for gid in range(2, 8))
+    graph.add_edge(8, 9)
+    ordered = pd.DataFrame({'gid': [8, 1, 2, 3, 4, 5, 6, 7, 9]})
+    result = network_resilience(graph, ordered, random_seed=42, draws=12)
+    assert result == network_resilience(graph, ordered, random_seed=42, draws=12)
+    assert result['baseline_largest_component'] == 7
+    scenario = result['scenarios'][0]
+    assert scenario['removed_count'] == 5
+    assert scenario['removed_priority_gids'] == ['1', '2', '3', '4', '5']
+    assert scenario['largest_after_priority'] == 1
+    assert scenario['components_after_priority'] == 2
+    assert scenario['largest_after_degree'] == 1
+    assert 1 <= scenario['random_median_largest'] <= 2
+    small = nx.DiGraph([(1, 2)])
+    assert network_resilience(small, pd.DataFrame({'gid': [1, 2]}), 42)['scenarios'] == []
+    with pytest.raises(ValueError, match='at least one draw'):
+        network_resilience(graph, ordered, 42, draws=0)
 
 
 def test_daily_proximity_does_not_count_outgoing_volume_twice():

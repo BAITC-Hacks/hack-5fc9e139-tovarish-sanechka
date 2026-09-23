@@ -100,6 +100,8 @@ def test_exports_contract_and_repeatability(tmp_path):
     assert sum(c['n_nodes'] for c in result['clusters']) == 2248
     assert json.loads((first/'analysis.json').read_text()) == result
     assert np.isclose(nodes.priority_score, nodes.priority_seed_reach + nodes.priority_structure + nodes.priority_volume).all()
+    assert result['resilience']['baseline_largest_component'] == 1877
+    assert [s['removed_count'] for s in result['resilience']['scenarios']] == [5, 10, 20]
 
 
 def test_concurrent_output_is_rejected(tmp_path):

@@ -6,6 +6,8 @@ from collections import deque
 import fcntl
 import json
 import os
+import random
+import statistics
 import tempfile
 import time
 import tomllib
@@ -272,9 +274,43 @@ def summarize_clusters(df, edges, ordered):
     return clusters
 
 
+def network_resilience(G, ordered, random_seed, draws=100):
+    """Compare removals within the original largest weak component only."""
+    if draws < 1:
+        raise ValueError('Random control requires at least one draw')
+    members = max(nx.weakly_connected_components(G), key=lambda part: (len(part), -min(part)))
+    component = G.subgraph(members).copy()
+    ranked = [int(gid) for gid in ordered.gid if gid in members]
+    by_degree = sorted(members, key=lambda gid: (-component.degree(gid), gid))
+    candidates = sorted(members)
+    rng = random.Random(random_seed)
+
+    def remaining_graph(removed):
+        rest = component.copy()
+        rest.remove_nodes_from(removed)
+        sizes = [len(part) for part in nx.weakly_connected_components(rest)]
+        return max(sizes, default=0), len(sizes)
+
+    scenarios = []
+    for count in (5, 10, 20):
+        if count >= len(members):
+            continue
+        priority_size, fragments = remaining_graph(ranked[:count])
+        degree_size, _ = remaining_graph(by_degree[:count])
+        random_sizes = [remaining_graph(rng.sample(candidates, count))[0] for _ in range(draws)]
+        scenarios.append(dict(removed_count=count,
+                              removed_priority_gids=[str(gid) for gid in ranked[:count]],
+                              largest_after_priority=priority_size,
+                              components_after_priority=fragments,
+                              largest_after_degree=degree_size,
+                              random_median_largest=statistics.median(random_sizes)))
+    return dict(baseline_largest_component=len(members), random_seed=random_seed,
+                random_draws=draws, scenarios=scenarios)
+
+
 # ---------------------------------------------------------------- выгрузки
 
-def write_outputs(df, edges, nodes, tx, config, out_dir):
+def write_outputs(df, edges, nodes, tx, config, resilience, out_dir):
     """Validate the entire result before publishing files from the same tables."""
     ordered = df.sort_values(['priority_score', 'gid'], ascending=[False, True])
     top = ordered[['gid', 'role', 'priority_score', 'evidence']].rename(columns={'evidence': 'why'}).copy()
@@ -304,7 +340,7 @@ def write_outputs(df, edges, nodes, tx, config, out_dir):
         nodes=node_records,
         edges=[dict(id=f'edge:{r.src}:{r.dst}', src=str(r.src), dst=str(r.dst), sum_kzt=float(r.sum_kzt), n_tx=int(r.n_tx), depth=int(r.depth))
                for r in edges.sort_values(['src','dst']).itertuples()],
-        clusters=clusters, top_nodes=top_records,
+        clusters=clusters, top_nodes=top_records, resilience=resilience,
     )
     validate_outputs(df, nodes, clusters, top, result)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -398,7 +434,9 @@ def analyze(data_dir, out_dir, config_path, on_ready=None):
         scored = score_nodes(features, config)
         paths = representative_seed_paths(graph, nodes)
         scored['seed_path_gids'] = scored.gid.map(paths)
-        result = write_outputs(scored, edges, nodes, tx, config, out_dir)
+        ordered = scored.sort_values(['priority_score', 'gid'], ascending=[False, True])
+        resilience = network_resilience(graph, ordered, config['random_seed'])
+        result = write_outputs(scored, edges, nodes, tx, config, resilience, out_dir)
         print(f'Analysis complete: {len(nodes)} nodes, {len(result["clusters"])} clusters, {time.perf_counter()-start:.3f} seconds', flush=True)
         if on_ready is not None:
             on_ready(result)
