@@ -1,13 +1,19 @@
 import { test, expect } from "@playwright/test";
+import { type Analysis } from "../src/types";
+
+const find = async (page: any, id: string) => {
+  await page.getByLabel("Найти узел по gid").fill(id);
+  await page.getByRole("button", { name: "Найти", exact: true }).click();
+};
 
 test("real data: search, isolate, unknown gid, filters, graph and CSV", async ({
   page,
   request,
 }) => {
-  const data = await (await request.get("/analysis.json")).json();
-  const errors: string[] = [];
+  const data: Analysis = await (await request.get("/analysis.json")).json();
+  const errors: string[] = [],
+    external: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  const external: string[] = [];
   page.on("request", (r) => {
     if (
       new URL(r.url()).origin !==
@@ -16,18 +22,15 @@ test("real data: search, isolate, unknown gid, filters, graph and CSV", async ({
       external.push(r.url());
   });
   await page.goto("/");
-  await expect(
-    page.getByRole("heading", { name: "Приоритеты проверки" }),
-  ).toBeVisible();
-  await expect(page.locator(".node-id")).toHaveText(data.top_nodes[0].gid);
-  await page
-    .getByLabel("Найти узел по gid")
-    .fill(data.nodes.find((n: any) => n.truncated_by_depth).gid);
-  await page.getByRole("button", { name: "Найти", exact: true }).click();
+  const first = data.top_nodes.find(
+    (t) => !data.nodes.find((n) => n.gid === t.gid)!.is_seed,
+  )!;
+  await expect(page.locator(".node-id")).toHaveText(first.gid);
+  await expect(page.getByLabel("Выборка", { exact: true })).toHaveValue("new");
+  await find(page, data.nodes.find((n) => n.truncated_by_depth)!.gid);
   await expect(page.locator(".warnings")).toContainText("Граница 4-го колена");
-  const isolate = data.nodes.find((n: any) => n.in_tx + n.out_tx === 0);
-  await page.getByLabel("Найти узел по gid").fill(isolate.gid);
-  await page.getByRole("button", { name: "Найти", exact: true }).click();
+  const isolate = data.nodes.find((n) => n.in_tx + n.out_tx === 0)!;
+  await find(page, isolate.gid);
   await expect(page.locator(".node-id")).toHaveText(isolate.gid);
   await expect(page.locator(".network .empty")).toContainText(
     "Изолированный узел",
@@ -36,42 +39,41 @@ test("real data: search, isolate, unknown gid, filters, graph and CSV", async ({
     "aria-label",
     /1 узлов, 0 связей/,
   );
-  await page.getByLabel("Найти узел по gid").fill("999");
-  await page.getByRole("button", { name: "Найти", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("не найден");
-  await page.getByLabel("Роль", { exact: true }).selectOption("transit");
+  await find(page, "999");
+  await expect(page.locator(".app-notice")).toContainText("не найден");
+  await page.locator(".priority-filters summary").click();
+  await page
+    .getByLabel("Основная роль", { exact: true })
+    .selectOption("transit");
   await page
     .getByLabel("Кластер", { exact: true })
     .selectOption(String(isolate.cluster_id));
   await expect(page.locator(".list .empty")).toBeVisible();
-  await page.getByLabel("Найти узел по gid").fill(data.top_nodes[0].gid);
-  await page.getByRole("button", { name: "Найти", exact: true }).click();
-  await expect(page.locator(".node-id")).toHaveText(data.top_nodes[0].gid);
+  await expect(page.locator(".details .stale-notice")).toContainText(
+    "вне текущей выборки",
+  );
   await page.getByRole("button", { name: "Сбросить", exact: true }).click();
   await page.locator(".gid-button").nth(1).click();
   await expect(page.locator(".node-id")).toHaveText(data.top_nodes[1].gid);
-  await page
-    .getByText("Все переводы выбранного узла", { exact: false })
-    .click();
-  await expect(page.locator(".connections tbody tr")).toHaveCount(
-    data.edges.filter(
-      (e: any) =>
-        e.src === data.top_nodes[1].gid || e.dst === data.top_nodes[1].gid,
-    ).length,
-  );
-  const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("link", { name: "nodes_roles.csv" }).click();
-  const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe("nodes_roles.csv");
-  expect(await download.failure()).toBeNull();
-  await page.screenshot({ path: "/tmp/hackalem-desktop.png", fullPage: true });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.screenshot({ path: "/tmp/hackalem-mobile.png", fullPage: true });
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= innerWidth,
-    ),
-  ).toBeTruthy();
+  await expect(page.locator(".details")).toBeFocused();
+  await page.locator(".connections summary").click();
+  await expect(page.locator(".connections tbody tr")).toHaveCount(10);
+  await expect(page.locator(".connections")).toContainText("агрегированы");
+  await page.locator(".exports summary").click();
+  for (const [label, filename] of [
+    ["Участники и роли", "nodes_roles"],
+    ["Кластеры", "clusters"],
+    ["Приоритеты проверки", "top_nodes"],
+  ]) {
+    const pending = page.waitForEvent("download");
+    await page.getByRole("link", { name: label, exact: true }).click();
+    const download = await pending;
+    expect(download.suggestedFilename()).toBe(`${filename}.csv`);
+    expect(await download.failure()).toBeNull();
+    expect(
+      (await (await request.get(`/${filename}.csv`)).text()).split("\n").length,
+    ).toBeGreaterThan(20);
+  }
   expect(errors).toEqual([]);
   expect(external).toEqual([]);
 });
@@ -100,109 +102,135 @@ test("malformed data is rejected", async ({ page }) => {
   await expect(page.getByRole("alert")).toContainText("повреждён");
 });
 
-test('cluster expansion, keyboard selection and all downloads', async ({page, request}) => {
-  const data = await (await request.get('/analysis.json')).json();
-  const cluster = data.clusters.find((c:any) => c.n_nodes > 80);
-  await page.goto('/');
-  await page.getByLabel('Найти узел по gid').fill(cluster.top_gids[0]);
-  await page.getByLabel('Найти узел по gid').press('Enter');
-  await expect(page.locator('.node-id')).toHaveText(cluster.top_gids[0]);
-  await page.getByLabel('Область графа').selectOption('cluster');
-  await expect(page.locator('.graph-status')).toContainText(`80 из ${cluster.n_nodes}`);
-  await page.getByRole('button', {name:'Показать всё', exact:true}).click();
-  await expect(page.locator('.graph-status')).toContainText(`${cluster.n_nodes} из ${cluster.n_nodes}`);
-  const first = page.locator('.gid-button').first();
-  await first.focus(); await page.keyboard.press('Enter');
-  await expect(page.locator('.node-id')).toHaveText(data.top_nodes[0].gid);
-  for (const name of ['nodes_roles','clusters','top_nodes']) {
-    const waiting=page.waitForEvent('download');
-    await page.getByRole('link', {name:`${name}.csv`}).click();
-    const download=await waiting;
-    expect(await download.failure()).toBeNull();
-    const response=await request.get(`/${name}.csv`);
-    expect(response.ok()).toBeTruthy();
-    expect((await response.text()).split('\n').length).toBeGreaterThan(20);
-  }
+test("cluster expansion, keyboard selection and graph controls", async ({
+  page,
+  request,
+}) => {
+  const data: Analysis = await (await request.get("/analysis.json")).json();
+  const cluster = data.clusters.find((c) => c.n_nodes > 80)!;
+  await page.goto("/");
+  await find(page, cluster.top_gids[0]);
+  await page.getByLabel("Область графа").selectOption("cluster");
+  await expect(page.locator(".graph-status")).toContainText(
+    `30 из ${cluster.n_nodes}`,
+  );
+  await page.getByRole("button", { name: "Показать всё", exact: true }).click();
+  await expect(page.locator(".graph-status")).toContainText(
+    `${cluster.n_nodes} из ${cluster.n_nodes}`,
+  );
+  const first = await page.locator(".gid-button").first().textContent();
+  await page.locator(".gid-button").first().focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".node-id")).toHaveText(first!);
+  const zoom = await page.getByLabel("Масштаб графа").textContent();
+  await page.getByRole("button", { name: "Увеличить граф" }).click();
+  await expect(page.getByLabel("Масштаб графа")).not.toHaveText(zoom!);
+  await page.getByRole("button", { name: "Вписать граф" }).click();
 });
 
-test('seed path, next request and resilience stay usable on mobile', async ({page, request}) => {
-  const data = await (await request.get('/analysis.json')).json();
-  const boundary = data.nodes.find((n: any) =>
-    n.truncated_by_depth && n.seed_path_gids.length === 5);
-  expect(boundary).toBeTruthy();
-  await page.goto('/');
-  await page.getByLabel('Найти узел по gid').fill(boundary.gid);
-  await page.getByRole('button', {name: 'Найти', exact: true}).click();
-  await expect(page.locator('.next-check')).toContainText('4-го колена');
-  await page.getByLabel('Область графа').selectOption('path');
-  await expect(page.locator('.path-details li')).toHaveCount(4);
-  await expect(page.locator('.path-details')).toContainText(boundary.gid);
-  await expect(page.getByRole('img')).toHaveAttribute('aria-label', /5 узлов, 4 связей/);
-  await expect(page.locator('.path-details')).toContainText('не доказывает движение');
-
-  await page.getByText('Устойчивость наблюдаемой сети').click();
-  await expect(page.locator('.resilience')).toContainText('1 877');
-  await expect(page.locator('.resilience tbody tr')).toHaveCount(3);
-  await expect(page.locator('.resilience tbody tr').first()).toContainText('1 624');
-  await page.setViewportSize({width: 390, height: 844});
-  await expect.poll(() => page.evaluate(
-    () => document.documentElement.scrollWidth <= innerWidth,
-  )).toBeTruthy();
-
-  const isolate = data.nodes.find((n: any) => n.is_seed && n.in_tx + n.out_tx === 0);
-  await page.getByLabel('Найти узел по gid').fill(isolate.gid);
-  await page.getByRole('button', {name: 'Найти', exact: true}).click();
-  await expect(page.locator('.path-details')).toContainText('Путь от другого исходного узла');
+test("seed path, next request and resilience stay usable on mobile", async ({
+  page,
+  request,
+}) => {
+  const data: Analysis = await (await request.get("/analysis.json")).json();
+  const boundary = data.nodes.find(
+    (n) => n.truncated_by_depth && n.seed_path_gids.length === 5,
+  )!;
+  await page.goto("/");
+  await find(page, boundary.gid);
+  await expect(page.locator(".next-check")).toContainText("4-го колена");
+  await page.getByLabel("Область графа").selectOption("path");
+  await expect(page.locator(".path-details li")).toHaveCount(4);
+  await expect(page.getByRole("img")).toHaveAttribute(
+    "aria-label",
+    /5 узлов, 4 связей/,
+  );
+  await expect(page.locator(".path-details")).toContainText(
+    "не доказывает движение",
+  );
+  await page.getByText("Устойчивость наблюдаемой сети").click();
+  await expect(page.locator(".resilience")).toContainText("1 877");
+  await expect(page.locator(".resilience tbody tr")).toHaveCount(3);
+  await expect(page.locator(".resilience tbody tr").first()).toContainText(
+    "1 624",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Связи", exact: true }).click();
+  await expect(page.locator(".network")).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+    )
+    .toBeTruthy();
+  const isolate = data.nodes.find(
+    (n) => n.is_seed && n.in_tx + n.out_tx === 0,
+  )!;
+  await find(page, isolate.gid);
+  await page.getByRole("button", { name: "Связи", exact: true }).click();
+  await expect(page.locator(".path-details")).toContainText(
+    "Путь от другого исходного узла",
+  );
 });
 
-test('common downstream search explains candidates from multiple seeds', async ({page, request}) => {
-  const data = await (await request.get('/analysis.json')).json();
-  const first = '100000003016635100';
-  const second = '100000004269433100';
-  const target = '100000008346837100';
-  const isolate = data.nodes.find((n: any) => n.is_seed && n.in_tx + n.out_tx === 0).gid;
-  await page.goto('/');
-  const input = page.getByLabel('Исходные gid');
-  const submit = page.getByRole('button', {name: 'Найти общие узлы'});
-
+test("common search keeps results through invalid edits and opens either route", async ({
+  page,
+  request,
+}) => {
+  const data: Analysis = await (await request.get("/analysis.json")).json();
+  const first = "100000003016635100",
+    second = "100000004269433100",
+    target = "100000008346837100";
+  const isolate = data.nodes.find(
+    (n) => n.is_seed && n.in_tx + n.out_tx === 0,
+  )!.gid;
+  await page.goto("/");
+  await page.getByRole("button", { name: "Общие узлы", exact: true }).click();
+  const input = page.getByLabel("Исходные gid"),
+    submit = page.getByRole("button", { name: "Найти общие узлы" });
   await input.fill(`${first}, ${second}`);
   await submit.click();
-  await expect(page.locator('.candidate-list li').first()).toContainText(target);
-  await page.locator('.candidate-list button').filter({hasText: target}).click();
-  await expect(page.locator('.node-id')).toHaveText(target);
-  await expect(page.locator('.details .facts').first()).toContainText('№ 2 из 2 248');
-  await expect(page.locator('.priority-parts')).toContainText('Охват');
-  await expect(page.locator('.source-path')).toHaveCount(2);
-  await expect(page.locator('.source-path').first()).toContainText(first);
-  await expect(page.locator('.source-path').last()).toContainText(second);
-  await expect(page.locator('.source-path').first()).toContainText('шагов: 2');
-  await expect(page.locator('.source-path').last()).toContainText('шагов: 4');
-  await expect(page.locator('.source-path').first()).toContainText(target);
-  await expect(page.locator('.source-path').last()).toContainText(target);
-  await expect(page.locator('.source-path li').first()).toContainText('₸');
-  await page.locator('.gid-button').first().click();
-  await expect(page.locator('.convergence-paths')).toHaveCount(0);
-  await page.locator('.candidate-list button').filter({hasText: target}).click();
-  await page.setViewportSize({width: 390, height: 844});
-  await expect.poll(() => page.evaluate(
-    () => document.documentElement.scrollWidth <= innerWidth,
-  )).toBeTruthy();
-
+  await expect(page.locator(".candidate-list li").first()).toContainText(
+    target,
+  );
+  await page
+    .locator(".candidate-list button")
+    .filter({ hasText: target })
+    .click();
+  await expect(page.locator(".node-id")).toHaveText(target);
+  await expect(page.locator(".details")).toBeFocused();
+  await expect(page.locator(".source-path")).toHaveCount(2);
+  for (const [index, length] of [2, 4].entries()) {
+    await page.locator(".source-path").nth(index).click();
+    await expect(page.locator(".path-details li")).toHaveCount(length);
+    await expect(page.locator(".path-details")).toContainText(target);
+  }
+  const count = await page.locator(".result-count").textContent();
   await input.fill(`${first}, ${first}`);
+  await expect(page.locator(".convergence .stale-notice")).toContainText(
+    "Запрос изменён",
+  );
   await submit.click();
-  await expect(page.locator('.convergence [role="alert"]')).toContainText('не должны повторяться');
-  await expect(page.locator('.candidate-list')).toHaveCount(0);
+  await expect(page.locator(".convergence [role=alert]")).toContainText(
+    "не должны повторяться",
+  );
+  await expect(page.locator(".result-count")).toHaveText(count!);
   await input.fill(`${first}, ${target}`);
   await submit.click();
-  await expect(page.locator('.convergence [role="alert"]')).toContainText('не найден среди исходных');
+  await expect(page.locator(".convergence [role=alert]")).toContainText(
+    "не найден среди исходных",
+  );
   await input.fill(first);
   await submit.click();
-  await expect(page.locator('.convergence [role="alert"]')).toContainText('от 2 до 5');
-
+  await expect(page.locator(".convergence [role=alert]")).toContainText(
+    "от 2 до 5",
+  );
   await input.fill(`${first}\n${isolate}`);
   await submit.click();
-  await expect(page.locator('.convergence .empty')).toContainText('Общих новых узлов');
-  await expect.poll(() => page.evaluate(
-    () => document.documentElement.scrollWidth <= innerWidth,
-  )).toBeTruthy();
+  await expect(page.locator(".convergence .empty")).toContainText(
+    "Общих новых узлов",
+  );
+  await page.getByRole("button", { name: "Свернуть поиск" }).click();
+  await expect(page.locator(".convergence")).toHaveCount(0);
+  await page.getByRole("button", { name: "Общие узлы", exact: true }).click();
+  await expect(input).toHaveValue(`${first}\n${isolate}`);
 });

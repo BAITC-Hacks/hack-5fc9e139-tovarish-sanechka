@@ -77,6 +77,14 @@ export interface Cluster {
 export interface Analysis {
   schema_version: 2;
   meta: {
+    config: {
+      thresholds: Record<string, number>;
+      priority_weights: {
+        seed_reach: number;
+        structure: number;
+        volume: number;
+      };
+    };
     n_nodes: number;
     n_edges: number;
     n_transactions: number;
@@ -117,7 +125,10 @@ const gid = (v: unknown): v is string =>
 const calendarDate = (v: unknown): v is string => {
   if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
   const timestamp = Date.parse(`${v}T00:00:00Z`);
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === v;
+  return (
+    Number.isFinite(timestamp) &&
+    new Date(timestamp).toISOString().slice(0, 10) === v
+  );
 };
 export function validateAnalysis(value: unknown): Analysis {
   const fail = (): never => {
@@ -127,8 +138,41 @@ export function validateAnalysis(value: unknown): Analysis {
   };
   if (!object(value) || value.schema_version !== 2 || !object(value.meta))
     return fail();
-  if (!calendarDate(value.meta.period_start) || !calendarDate(value.meta.period_end) ||
-      value.meta.period_start > value.meta.period_end) return fail();
+  const config = value.meta.config;
+  if (
+    !object(config) ||
+    !object(config.thresholds) ||
+    !object(config.priority_weights)
+  )
+    return fail();
+  for (const key of [
+    "min_payers",
+    "min_recipients",
+    "min_volume",
+    "min_seed_reach",
+    "coordinator_seed_reach",
+    "min_neighbor_clusters",
+    "min_betweenness",
+    "max_concentration",
+    "transit_ratio_min",
+    "transit_ratio_max",
+    "min_recent_in_share",
+    "terminal_ratio_max",
+  ])
+    if (!numeric(config.thresholds[key]) || config.thresholds[key] < 0)
+      return fail();
+  for (const key of ["seed_reach", "structure", "volume"])
+    if (
+      !numeric(config.priority_weights[key]) ||
+      config.priority_weights[key] < 0
+    )
+      return fail();
+  if (
+    !calendarDate(value.meta.period_start) ||
+    !calendarDate(value.meta.period_end) ||
+    value.meta.period_start > value.meta.period_end
+  )
+    return fail();
   for (const key of ["nodes", "edges", "clusters", "top_nodes"])
     if (!Array.isArray(value[key])) return fail();
   const data = value as unknown as Analysis;
@@ -204,9 +248,13 @@ export function validateAnalysis(value: unknown): Analysis {
       !numeric(e.depth) ||
       !Array.isArray(e.dates) ||
       !e.dates.length ||
-      !e.dates.every((day, index) => calendarDate(day) &&
-        day >= data.meta.period_start && day <= data.meta.period_end &&
-        (index === 0 || e.dates[index - 1] < day))
+      !e.dates.every(
+        (day, index) =>
+          calendarDate(day) &&
+          day >= data.meta.period_start &&
+          day <= data.meta.period_end &&
+          (index === 0 || e.dates[index - 1] < day),
+      )
     )
       return fail();
     edgeIds.add(e.id);
@@ -301,3 +349,26 @@ export const percent = (n: number) =>
     style: "percent",
     maximumFractionDigits: 1,
   }).format(n);
+export const points = (n: number) =>
+  new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(n * 100);
+
+export function readable(text: string) {
+  let result = text
+    .replace(/; (граница depth=4|вход seed неполон|выборка неполна)/g, "")
+    .replaceAll("depth=4", "четырёх шагов")
+    .replaceAll("seed=", "исходных клиентов: ")
+    .replaceAll("seed", "исходных клиентов")
+    .replaceAll("внеш. кластеров", "соседних групп")
+    .replaceAll("посредничество", "участие в кратчайших маршрутах")
+    .replaceAll(
+      "близость ≤2д",
+      "отправлено в течение двух дней после поступления",
+    )
+    .replaceAll(
+      "не трассировка",
+      "совпадение дат не подтверждает перевод той же суммы",
+    );
+  for (const role of roles)
+    result = result.replaceAll(role, labels[role].toLowerCase());
+  return result;
+}
