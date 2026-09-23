@@ -44,7 +44,7 @@ PDF определяет обязательные результаты кейс�
 
 ```sh
 docker compose up -d --build --wait --wait-timeout 360
-firefox http://localhost:8080
+browser http://localhost:8080
 ```
 
 Обычный `docker compose up -d --build` тоже должен работать; до открытия
