@@ -43,6 +43,8 @@ export interface Node {
   truncated_by_depth: boolean;
   reachable_seed_count: number;
   data_warnings: string[];
+  seed_path_gids: string[];
+  next_check: string;
   role_scores: Record<Role, number>;
   betweenness: number;
   neighbor_cluster_count: number;
@@ -91,6 +93,19 @@ export interface Analysis {
     priority_score: number;
     why: string;
   }[];
+  resilience: {
+    baseline_largest_component: number;
+    random_seed: number;
+    random_draws: number;
+    scenarios: {
+      removed_count: number;
+      removed_priority_gids: string[];
+      largest_after_priority: number;
+      components_after_priority: number;
+      largest_after_degree: number;
+      random_median_largest: number;
+    }[];
+  };
 }
 const object = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -118,6 +133,10 @@ export function validateAnalysis(value: unknown): Analysis {
       !roles.includes(n.role) ||
       typeof n.evidence !== "string" ||
       !n.evidence ||
+      typeof n.next_check !== "string" ||
+      !n.next_check ||
+      !Array.isArray(n.seed_path_gids) ||
+      !n.seed_path_gids.every(gid) ||
       !Array.isArray(n.data_warnings) ||
       !n.data_warnings.every((x) => typeof x === "string")
     )
@@ -179,6 +198,19 @@ export function validateAnalysis(value: unknown): Analysis {
       return fail();
     edgeIds.add(e.id);
   }
+  const edgePairs = new Set(data.edges.map((e) => `${e.src}:${e.dst}`));
+  const seeds = new Set(data.nodes.filter((n) => n.is_seed).map((n) => n.gid));
+  for (const n of data.nodes) {
+    const path = n.seed_path_gids;
+    if (!path.length) {
+      if (n.is_seed || n.reachable_seed_count > 0) return fail();
+      continue;
+    }
+    if (path.at(-1) !== n.gid || !seeds.has(path[0])) return fail();
+    if (path.length === 1 && !n.is_seed) return fail();
+    for (let i = 1; i < path.length; i++)
+      if (!edgePairs.has(`${path[i - 1]}:${path[i]}`)) return fail();
+  }
   const clusters = new Set<number>();
   for (const c of data.clusters) {
     if (
@@ -221,6 +253,32 @@ export function validateAnalysis(value: unknown): Analysis {
     topIds.add(t.gid);
   }
   if (ids.size === 0 || topIds.size !== ids.size) return fail();
+  const resilience = data.resilience;
+  if (
+    !object(resilience) ||
+    !numeric(resilience.baseline_largest_component) ||
+    resilience.baseline_largest_component < 1 ||
+    !numeric(resilience.random_seed) ||
+    !numeric(resilience.random_draws) ||
+    resilience.random_draws < 1 ||
+    !Array.isArray(resilience.scenarios)
+  )
+    return fail();
+  for (const scenario of resilience.scenarios) {
+    if (
+      !object(scenario) ||
+      !numeric(scenario.removed_count) ||
+      scenario.removed_count < 1 ||
+      !Array.isArray(scenario.removed_priority_gids) ||
+      scenario.removed_priority_gids.length !== scenario.removed_count ||
+      !scenario.removed_priority_gids.every((id) => ids.has(id)) ||
+      !numeric(scenario.largest_after_priority) ||
+      !numeric(scenario.components_after_priority) ||
+      !numeric(scenario.largest_after_degree) ||
+      !numeric(scenario.random_median_largest)
+    )
+      return fail();
+  }
   return data;
 }
 export const number = (n: number) =>

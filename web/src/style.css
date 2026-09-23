@@ -330,6 +330,15 @@ th button {
 .warnings li + li {
   margin-top: 5px;
 }
+.next-check {
+  border-left: 3px solid var(--accent);
+  background: #f2f7fb;
+  padding: 11px 13px;
+  font-size: 12px;
+}
+.next-check p {
+  margin: 5px 0 0;
+}
 details {
   border-top: 1px solid var(--line);
   padding-top: 12px;
@@ -363,6 +372,9 @@ summary {
   border: 1px solid #e0e8ee;
   border-radius: 4px;
 }
+.graph-path {
+  height: 220px;
+}
 .graph-fit {
   font-size: 12px;
   margin-top: 8px;
@@ -375,6 +387,38 @@ summary {
   gap: 10px;
   margin: 12px 0;
   flex-wrap: wrap;
+}
+.path-details {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  margin-top: 12px;
+}
+.path-details h3 {
+  font-size: 13px;
+  margin: 0;
+}
+.path-details ol {
+  padding-left: 20px;
+  margin: 12px 0;
+}
+.path-details li {
+  padding: 7px 0;
+  border-bottom: 1px solid #e5ecf1;
+  font-size: 12px;
+}
+.path-step {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.path-step .link-button {
+  display: inline-block;
+  overflow-wrap: anywhere;
+}
+.path-details li > span:last-child {
+  display: block;
+  color: var(--muted);
 }
 .legend {
   display: flex;
@@ -417,6 +461,15 @@ footer nav {
 }
 footer details {
   width: 100%;
+}
+.resilience table {
+  min-width: 670px;
+}
+.resilience p {
+  margin: 10px 0;
+}
+.mobile-scroll-hint {
+  display: none;
 }
 .state {
   max-width: 620px;
@@ -498,6 +551,14 @@ footer details {
   }
   .graph {
     height: 340px;
+  }
+  .graph-path {
+    height: 180px;
+  }
+  .mobile-scroll-hint {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
   }
   .list,
   .details,

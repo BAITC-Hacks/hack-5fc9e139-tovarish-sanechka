@@ -124,3 +124,33 @@ test('cluster expansion, keyboard selection and all downloads', async ({page, re
     expect((await response.text()).split('\n').length).toBeGreaterThan(20);
   }
 });
+
+test('seed path, next request and resilience stay usable on mobile', async ({page, request}) => {
+  const data = await (await request.get('/analysis.json')).json();
+  const boundary = data.nodes.find((n: any) =>
+    n.truncated_by_depth && n.seed_path_gids.length === 5);
+  expect(boundary).toBeTruthy();
+  await page.goto('/');
+  await page.getByLabel('Найти узел по gid').fill(boundary.gid);
+  await page.getByRole('button', {name: 'Найти', exact: true}).click();
+  await expect(page.locator('.next-check')).toContainText('4-го колена');
+  await page.getByLabel('Область графа').selectOption('path');
+  await expect(page.locator('.path-details li')).toHaveCount(4);
+  await expect(page.locator('.path-details')).toContainText(boundary.gid);
+  await expect(page.getByRole('img')).toHaveAttribute('aria-label', /5 узлов, 4 связей/);
+  await expect(page.locator('.path-details')).toContainText('не доказывает движение');
+
+  await page.getByText('Устойчивость наблюдаемой сети').click();
+  await expect(page.locator('.resilience')).toContainText('1 877');
+  await expect(page.locator('.resilience tbody tr')).toHaveCount(3);
+  await expect(page.locator('.resilience tbody tr').first()).toContainText('1 624');
+  await page.setViewportSize({width: 390, height: 844});
+  await expect.poll(() => page.evaluate(
+    () => document.documentElement.scrollWidth <= innerWidth,
+  )).toBeTruthy();
+
+  const isolate = data.nodes.find((n: any) => n.is_seed && n.in_tx + n.out_tx === 0);
+  await page.getByLabel('Найти узел по gid').fill(isolate.gid);
+  await page.getByRole('button', {name: 'Найти', exact: true}).click();
+  await expect(page.locator('.path-details')).toContainText('Путь от другого исходного узла');
+});

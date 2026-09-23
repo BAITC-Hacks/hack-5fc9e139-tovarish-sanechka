@@ -19,6 +19,7 @@ const warnings: Record<string, string> = {
   no_observed_transfers: "Изолированный узел: в выборке нет переводов.",
   sample_incomplete: "Только наблюдаемые операции внутри выборки.",
 };
+type GraphMode = "neighbors" | "cluster" | "path";
 function Badge({ role }: { role: Role }) {
   return (
     <span className="badge">
@@ -89,6 +90,10 @@ function Details({
           <li key={w}>{warnings[w] ?? w}</li>
         ))}
       </ul>
+      <div className="next-check">
+        <strong>Следующий запрос</strong>
+        <p>{node.next_check}</p>
+      </div>
       <details>
         <summary>Все признаки и альтернативные роли</summary>
         <dl className="facts">
@@ -195,7 +200,7 @@ export default function App() {
   const [cluster, setCluster] = useState("");
   const [page, setPage] = useState(0);
   const [descending, setDescending] = useState(true);
-  const [mode, setMode] = useState<"neighbors" | "cluster">("neighbors");
+  const [mode, setMode] = useState<GraphMode>("neighbors");
   const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     const abort = new AbortController();
@@ -245,6 +250,15 @@ export default function App() {
   const graphData = useMemo(() => {
     if (!data || !node)
       return { nodes: [], edges: [], total: 0, totalEdges: 0 };
+    if (mode === "path") {
+      const path = node.seed_path_gids;
+      const nodes = path.length ? path.map((id) => byId.get(id)!) : [node];
+      const edges = path.slice(1).map(
+        (id, index) =>
+          data.edges.find((edge) => edge.src === path[index] && edge.dst === id)!,
+      );
+      return { nodes, edges, total: nodes.length, totalEdges: edges.length };
+    }
     const ids = new Set<string>([node.gid]);
     if (mode === "cluster")
       data.nodes
@@ -270,7 +284,7 @@ export default function App() {
       total: ids.size,
       totalEdges: allEdges.length,
     };
-  }, [data, node, mode, expanded]);
+  }, [data, node, mode, expanded, byId]);
   const connections = useMemo(
     () =>
       data?.edges.filter((e) => e.src === selected || e.dst === selected) ?? [],
@@ -476,12 +490,13 @@ export default function App() {
                 aria-label="Область графа"
                 value={mode}
                 onChange={(e) => {
-                  setMode(e.target.value as "neighbors" | "cluster");
+                  setMode(e.target.value as GraphMode);
                   setExpanded(false);
                 }}
               >
                 <option value="neighbors">Окружение · 1 шаг</option>
                 <option value="cluster">Кластер</option>
+                <option value="path">Путь от исходного</option>
               </select>
             </label>
           </div>
@@ -492,6 +507,7 @@ export default function App() {
             nodes={graphData.nodes}
             edges={graphData.edges}
             selected={selected}
+            pathMode={mode === "path"}
             onSelect={choose}
           />
           <div className="graph-status">
@@ -501,6 +517,39 @@ export default function App() {
               <button onClick={() => setExpanded(true)}>Показать всё</button>
             )}
           </div>
+          {mode === "path" && (
+            <div className="path-details">
+              <h3>Наблюдаемый путь от исходного узла</h3>
+              {graphData.edges.length ? (
+                <ol>
+                  {graphData.edges.map((edge) => (
+                    <li key={edge.id}>
+                      <span className="path-step">
+                        <button className="link-button" onClick={() => choose(edge.src)}>
+                          {edge.src}
+                        </button>
+                        <span aria-hidden="true">→</span>
+                        <button className="link-button" onClick={() => choose(edge.dst)}>
+                          {edge.dst}
+                        </button>
+                      </span>
+                      <span>{number(edge.sum_kzt)} ₸ · {edge.n_tx} операций</span>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="empty">
+                  {node.is_seed
+                    ? "Это исходный узел. Путь от другого исходного узла в выборке не найден."
+                    : "Направленный путь от исходного узла в выборке не найден."}
+                </p>
+              )}
+              <p className="muted">
+                Суммы агрегированы за июль. Путь по рёбрам не доказывает движение
+                одних и тех же денег.
+              </p>
+            </div>
+          )}
           {connections.length === 0 && (
             <p className="empty">
               Изолированный узел. В выборке нет входящих и исходящих переводов.
@@ -569,6 +618,46 @@ export default function App() {
               <li key={text}>{text}</li>
             ))}
           </ul>
+        </details>
+        <details className="resilience">
+          <summary>Устойчивость наблюдаемой сети</summary>
+          <p>
+            Крупнейшая исходная компонента: {number(data.resilience.baseline_largest_component)} узлов.
+            Сценарии исключают узлы только из неё.
+          </p>
+          {data.resilience.scenarios.length ? (
+            <div className="table-wrap">
+              <p className="mobile-scroll-hint">Справа — контрольные сравнения. Прокрутите таблицу.</p>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Исключено</th>
+                    <th>Крупнейший фрагмент: приоритет</th>
+                    <th>Фрагментов</th>
+                    <th>Крупнейший: степень</th>
+                    <th>Крупнейший: случайно, медиана</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.resilience.scenarios.map((scenario) => (
+                    <tr key={scenario.removed_count}>
+                      <td>Топ‑{scenario.removed_count}</td>
+                      <td>{number(scenario.largest_after_priority)}</td>
+                      <td>{number(scenario.components_after_priority)}</td>
+                      <td>{number(scenario.largest_after_degree)}</td>
+                      <td>{scenario.random_median_largest.toLocaleString("ru-RU", { maximumFractionDigits: 1 })}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p>Компонента слишком мала для сценариев топ‑5/10/20.</p>
+          )}
+          <p className="muted">
+            Случайный контроль: {data.resilience.random_draws} выборок с фиксированным seed.
+            Это модель связности наблюдаемого графа, не прогноз эффекта реального блокирования счетов.
+          </p>
         </details>
       </footer>
     </main>

@@ -6,17 +6,20 @@ export function GraphView({
   nodes,
   edges,
   selected,
+  pathMode,
   onSelect,
 }: {
   nodes: Node[];
   edges: Edge[];
   selected: string;
+  pathMode: boolean;
   onSelect: (gid: string) => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const graph = useRef<Core | null>(null);
   const select = useRef(onSelect);
   const positions = useRef(new Map<string, { x: number; y: number }>());
+  const previousPathMode = useRef(false);
   select.current = onSelect;
   useEffect(() => {
     const cy = cytoscape({
@@ -64,7 +67,10 @@ export function GraphView({
     });
     graph.current = cy;
     cy.on("tap", "node", (event) => select.current(event.target.id()));
-    const observer = new ResizeObserver(() => cy.resize());
+    const observer = new ResizeObserver(() => {
+      cy.resize();
+      cy.fit(undefined, 45);
+    });
     observer.observe(container.current!);
     return () => {
       observer.disconnect();
@@ -76,12 +82,13 @@ export function GraphView({
   useEffect(() => {
     const cy = graph.current;
     if (!cy) return;
-    cy.nodes().forEach((n) => {
-      positions.current.set(n.id(), { ...n.position() });
-    });
+    if (!previousPathMode.current)
+      cy.nodes().forEach((n) => {
+        positions.current.set(n.id(), { ...n.position() });
+      });
     const center = positions.current.get(selected) ?? { x: 0, y: 0 };
     const fresh = nodes.filter((n) => !positions.current.has(n.gid));
-    fresh.forEach((node, i) => {
+    if (!pathMode) fresh.forEach((node, i) => {
       const angle = (2 * Math.PI * i) / Math.max(fresh.length, 1);
       const radius = 100 + 25 * Math.sqrt(fresh.length);
       positions.current.set(
@@ -97,9 +104,11 @@ export function GraphView({
     cy.batch(() => {
       cy.elements().remove();
       cy.add(
-        nodes.map((n) => ({
+        nodes.map((n, index) => ({
           data: { id: n.gid, label: n.gid.slice(-8), color: colors[n.role] },
-          position: positions.current.get(n.gid),
+          position: pathMode
+            ? { x: index * 150, y: 0 }
+            : positions.current.get(n.gid),
         })),
       );
       cy.add(
@@ -109,8 +118,9 @@ export function GraphView({
       );
       cy.getElementById(selected).select();
     });
+    previousPathMode.current = pathMode;
     cy.fit(undefined, 45);
-  }, [nodes, edges]);
+  }, [nodes, edges, pathMode]);
   useEffect(() => {
     const cy = graph.current;
     if (cy) {
@@ -121,7 +131,7 @@ export function GraphView({
   return (
     <>
       <div
-        className="graph"
+        className={pathMode ? "graph graph-path" : "graph"}
         ref={container}
         role="img"
         aria-label={`Направленный граф: ${nodes.length} узлов, ${edges.length} связей. Полные идентификаторы и связи доступны ниже.`}
