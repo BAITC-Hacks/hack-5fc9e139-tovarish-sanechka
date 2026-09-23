@@ -4,4 +4,8 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
     init: true
+    environment:
+      ALEM_API_KEY: ${ALEM_API_KEY:-}
+      ALEM_CHAT_URL: ${ALEM_CHAT_URL:-}
+      ALEM_MODEL: ${ALEM_MODEL:-}
     stop_grace_period: 10s

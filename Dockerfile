@@ -14,7 +14,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-cache && useradd --uid 10001 --create-home app && mkdir /app/out && chown app:app /app /app/out
 COPY case/starter/ ./case/starter/
 COPY case/data/ ./case/data/
-COPY config.toml run.py healthcheck.py ./
+COPY config.toml run.py healthcheck.py assistant.py ./
 COPY --from=ui /build/web/dist ./web/dist
 RUN chmod -R a+rX /app
 USER app
