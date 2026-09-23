@@ -81,7 +81,7 @@ function Details({
           <dd>{percent(node.role_score)}</dd>
         </div>
         <div>
-          <dt>Достижимых исходных узлов</dt>
+          <dt>Исходных клиентов, от которых достижим узел</dt>
           <dd>{node.reachable_seed_count}</dd>
         </div>
         <div>
@@ -196,6 +196,7 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [role, setRole] = useState("");
   const [cluster, setCluster] = useState("");
+  const [consolidationOnly, setConsolidationOnly] = useState(false);
   const [page, setPage] = useState(0);
   const [descending, setDescending] = useState(true);
   const [mode, setMode] = useState<GraphMode>("neighbors");
@@ -229,6 +230,10 @@ export default function App() {
     () => new Map(data?.nodes.map((n) => [n.gid, n])),
     [data],
   );
+  const rankById = useMemo(
+    () => new Map(data?.top_nodes.map((n) => [n.gid, n.rank])),
+    [data],
+  );
   const node = byId.get(selected);
   const rows = useMemo(
     () =>
@@ -236,10 +241,12 @@ export default function App() {
         .map((t) => byId.get(t.gid)!)
         .filter(
           (n) =>
-            (!role || n.role === role) &&
+            (consolidationOnly
+              ? !n.is_seed && n.role_scores.consolidator > 0
+              : !role || n.role === role) &&
             (!cluster || String(n.cluster_id) === cluster),
         ) ?? [],
-    [data, byId, role, cluster],
+    [data, byId, role, cluster, consolidationOnly],
   );
   const sorted = useMemo(
     () => (descending ? rows : [...rows].reverse()),
@@ -292,6 +299,13 @@ export default function App() {
     setSelected(id);
     setNotice("");
     setExpanded(false);
+  }
+  function resetFilters() {
+    setConsolidationOnly(false);
+    setRole("");
+    setCluster("");
+    setPage(0);
+    setDescending(true);
   }
   if (error)
     return (
@@ -363,8 +377,26 @@ export default function App() {
             <h2 id="priority-title">Приоритеты проверки</h2>
             <span>{rows.length} узлов</span>
           </div>
+          <label className="investigation-view">
+            Выборка
+            <select
+              aria-label="Выборка"
+              value={consolidationOnly ? "consolidation" : "all"}
+              onChange={(event) => {
+                resetFilters();
+                setConsolidationOnly(event.target.value === "consolidation");
+              }}
+            >
+              <option value="all">Все узлы</option>
+              <option value="consolidation">Новые точки консолидации</option>
+            </select>
+          </label>
+          {consolidationOnly && <p className="muted selection-hint">
+            Клиенты вне исходного списка с признаками сбора средств, включая
+            альтернативную гипотезу. Номера — места в общем приоритете.
+          </p>}
           <div className="filters">
-            <label>
+            {!consolidationOnly && <label>
               Роль
               <select
                 aria-label="Роль"
@@ -381,7 +413,7 @@ export default function App() {
                   </option>
                 ))}
               </select>
-            </label>
+            </label>}
             <label>
               Кластер
               <select
@@ -401,11 +433,7 @@ export default function App() {
               </select>
             </label>
             <button
-              onClick={() => {
-                setRole("");
-                setCluster("");
-                setPage(0);
-              }}
+              onClick={resetFilters}
             >
               Сбросить
             </button>
@@ -442,8 +470,12 @@ export default function App() {
                         {n.gid}
                       </button>
                       <Badge role={n.role} />
+                      {consolidationOnly && <small className="consolidation-evidence">
+                        Признаки консолидации · {n.in_deg} плательщиков · от {n.reachable_seed_count} исходных клиентов
+                      </small>}
                     </td>
                     <td>
+                      {consolidationOnly && <small className="global-rank">№ {rankById.get(n.gid)}</small>}
                       <strong>{percent(n.priority_score)}</strong>
                       <div className="score-bar">
                         <span style={{ width: `${n.priority_score * 100}%` }} />
@@ -456,8 +488,10 @@ export default function App() {
           </div>
           {rows.length === 0 ? (
             <p className="empty">
-              Нет узлов с такими фильтрами. Сбросьте фильтры, чтобы увидеть все
-              узлы.
+              {consolidationOnly
+                ? "Новых точек консолидации с такими фильтрами нет. "
+                : "Нет узлов с такими фильтрами. "}
+              <button className="link-button" onClick={resetFilters}>Показать все узлы</button>
             </p>
           ) : (
             <div className="pagination">

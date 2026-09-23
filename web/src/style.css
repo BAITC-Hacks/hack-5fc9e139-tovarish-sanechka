@@ -295,6 +295,28 @@ a {
   margin-bottom: 14px;
   flex-wrap: wrap;
 }
+.investigation-view {
+  display: grid;
+  gap: 6px;
+  margin-top: 16px;
+  font-size: 12px;
+  font-weight: bold;
+}
+.investigation-view select {
+  width: 100%;
+  min-width: 0;
+}
+.selection-hint {
+  font-size: 12px;
+}
+.consolidation-evidence,
+.global-rank {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
 .filters label {
   flex: 1;
   min-width: 100px;
