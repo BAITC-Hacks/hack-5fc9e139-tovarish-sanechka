@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
+  <title id="title">Граф денег — схема решения HackAlem AI</title>
+  <desc id="description">От трёх Parquet-файлов через проверку данных и объяснимую аналитику к приоритетам проверки, направленному пути и трём CSV.</desc>
+  <defs>
+    <style>
+      .body { font-family: Arial, Helvetica, sans-serif; fill: #20394c; }
+      .title { font-family: Georgia, serif; font-size: 60px; fill: #20394c; }
+      .subtitle { font-size: 26px; fill: #526b7c; }
+      .eyebrow { font-size: 18px; font-weight: 700; letter-spacing: 2px; fill: #526b7c; }
+      .card-title { font-size: 26px; font-weight: 700; }
+      .card-body { font-size: 21px; fill: #526b7c; }
+      .metric { font-size: 37px; font-weight: 700; fill: #2165ac; }
+      .small { font-size: 18px; fill: #526b7c; }
+      .panel-title { font-size: 24px; font-weight: 700; }
+      .panel-body { font-size: 21px; }
+      .white { fill: #fff; }
+      .light { fill: #dce9f2; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f8da4"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="900" fill="#edf2f6"/>
+  <rect x="0" y="0" width="1600" height="14" fill="#2165ac"/>
+  <text x="70" y="75" class="body eyebrow">HACKALEM AI · ФИНАНСОВАЯ СЕТЬ</text>
+  <text x="70" y="145" class="title">Граф денег</text>
+  <text x="70" y="185" class="body subtitle">От 81 исходного клиента — к объяснимому списку проверок</text>
+  <text x="1530" y="80" text-anchor="end" class="body small">Июль 2026 · локальный расчёт</text>
+
+  <g class="body">
+    <rect x="70" y="230" width="340" height="280" rx="14" fill="#fff" stroke="#d4dfe7" stroke-width="2"/>
+    <text x="95" y="265" class="eyebrow">01 · ВХОД</text>
+    <text x="95" y="310" class="card-title">Три Parquet-файла</text>
+    <text x="95" y="362" class="metric">2 248</text>
+    <text x="95" y="394" class="card-body">клиентов</text>
+    <text x="95" y="444" class="card-body">3 119 направленных связей</text>
+    <text x="95" y="474" class="card-body">4 840 операций</text>
+
+    <rect x="440" y="230" width="340" height="280" rx="14" fill="#fff" stroke="#d4dfe7" stroke-width="2"/>
+    <text x="465" y="265" class="eyebrow">02 · ПОДГОТОВКА</text>
+    <text x="465" y="310" class="card-title">Проверка и граф</text>
+    <text x="465" y="362" class="metric">19</text>
+    <text x="465" y="394" class="card-body">изолятов сохранены</text>
+    <text x="465" y="444" class="card-body">суммы, даты, направление</text>
+    <text x="465" y="474" class="card-body">и охват исходных узлов</text>
+
+    <rect x="810" y="230" width="340" height="280" rx="14" fill="#fff" stroke="#d4dfe7" stroke-width="2"/>
+    <text x="835" y="265" class="eyebrow">03 · АНАЛИТИКА</text>
+    <text x="835" y="310" class="card-title">Объяснимые правила</text>
+    <text x="835" y="362" class="metric">6 ролей</text>
+    <text x="835" y="394" class="card-body">88 кластеров</text>
+    <text x="835" y="444" class="card-body">числовые основания роли</text>
+    <text x="835" y="474" class="card-body">и отдельный приоритет</text>
+
+    <rect x="1180" y="230" width="350" height="280" rx="14" fill="#fff" stroke="#d4dfe7" stroke-width="2"/>
+    <text x="1205" y="265" class="eyebrow">04 · РЕШЕНИЕ</text>
+    <text x="1205" y="310" class="card-title">Кого проверить?</text>
+    <text x="1205" y="362" class="metric">Топ-лист</text>
+    <text x="1205" y="394" class="card-body">путь от исходного узла</text>
+    <text x="1205" y="444" class="card-body">следующий запрос</text>
+    <text x="1205" y="474" class="card-body">экран и три CSV</text>
+  </g>
+
+  <path d="M 414 370 H 434" stroke="#6f8da4" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M 784 370 H 804" stroke="#6f8da4" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M 1154 370 H 1174" stroke="#6f8da4" stroke-width="4" marker-end="url(#arrow)"/>
+
+  <rect x="70" y="545" width="890" height="270" rx="14" fill="#20394c"/>
+  <text x="100" y="593" class="body panel-title white">Наблюдаемый направленный путь</text>
+  <text x="100" y="626" class="body panel-body light">От seed до выбранного gid: каждое ребро имеет сумму и число операций</text>
+  <path d="M 160 705 H 870" stroke="#9db8cb" stroke-width="4" marker-end="url(#arrow)"/>
+  <g fill="#60a0d2" stroke="#fff" stroke-width="3">
+    <circle cx="160" cy="705" r="18"/>
+    <circle cx="335" cy="705" r="18"/>
+    <circle cx="510" cy="705" r="18"/>
+    <circle cx="685" cy="705" r="18"/>
+    <circle cx="860" cy="705" r="18"/>
+  </g>
+  <text x="160" y="753" text-anchor="middle" class="body small light">seed</text>
+  <text x="335" y="753" text-anchor="middle" class="body small light">1 шаг</text>
+  <text x="510" y="753" text-anchor="middle" class="body small light">2 шага</text>
+  <text x="685" y="753" text-anchor="middle" class="body small light">3 шага</text>
+  <text x="860" y="753" text-anchor="middle" class="body small light">depth=4</text>
+  <text x="100" y="792" class="body small light">Путь показывает связи, а не движение одних и тех же денег.</text>
+
+  <rect x="985" y="545" width="545" height="270" rx="14" fill="#fbf5e9" stroke="#e5d5bb" stroke-width="2"/>
+  <text x="1015" y="593" class="body panel-title">Что остаётся неопределённым</text>
+  <text x="1015" y="638" class="body panel-body">Граница 4-го колена обрывает выход.</text>
+  <text x="1015" y="674" class="body panel-body">Входящие seed неполны.</text>
+  <text x="1015" y="710" class="body panel-body">Роли — гипотезы для проверки.</text>
+  <line x1="1015" y1="735" x2="1500" y2="735" stroke="#d5c5ae"/>
+  <text x="1015" y="779" class="body small">Устойчивость: 1 877 → 1 414 при исключении топ‑10;</text>
+  <text x="1015" y="803" class="body small">случайный контроль — медиана 1 860.</text>
+
+  <text x="70" y="862" class="body small">Один запуск: Parquet → проверка → 3 CSV + локальный интерфейс. Без внешних данных и обязательного LLM.</text>
+</svg>
