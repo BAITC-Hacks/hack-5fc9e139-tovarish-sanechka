@@ -1,0 +1,13 @@
+# Local Serena workspace
+.serena/
+
+# macOS metadata
+.DS_Store
+__MACOSX/
+._*
+
+# Python environment and generated files
+.venv/
+__pycache__/
+*.py[cod]
+case/starter/out/
