@@ -56,6 +56,13 @@ export interface Node {
   priority_volume: number;
   in_concentration: number | null;
   out_concentration: number | null;
+  role_sensitivity: RoleScenario[];
+}
+export interface RoleScenario {
+  scenario: "lower" | "base" | "higher";
+  role: Role;
+  role_score: number;
+  reasons: string[];
 }
 export interface Edge {
   id: string;
@@ -65,6 +72,7 @@ export interface Edge {
   n_tx: number;
   depth: number;
   dates: string[];
+  operations: { index: number; date: string; sum_kzt: number }[];
 }
 export interface Cluster {
   cluster_id: number;
@@ -75,7 +83,12 @@ export interface Cluster {
   hypothesis: string;
 }
 export interface Analysis {
-  schema_version: 2;
+  schema_version: 3;
+  sensitivity: {
+    id: RoleScenario["scenario"];
+    factor: number;
+    thresholds: Record<string, number>;
+  }[];
   meta: {
     config: {
       thresholds: Record<string, number>;
@@ -136,7 +149,7 @@ export function validateAnalysis(value: unknown): Analysis {
       "Файл результатов повреждён или имеет неподдерживаемый формат. Повторите расчёт приложения.",
     );
   };
-  if (!object(value) || value.schema_version !== 2 || !object(value.meta))
+  if (!object(value) || value.schema_version !== 3 || !object(value.meta))
     return fail();
   const config = value.meta.config;
   if (
@@ -176,6 +189,17 @@ export function validateAnalysis(value: unknown): Analysis {
   for (const key of ["nodes", "edges", "clusters", "top_nodes"])
     if (!Array.isArray(value[key])) return fail();
   const data = value as unknown as Analysis;
+  const scenarioIds = ["lower", "base", "higher"];
+  const varied = ["min_payers", "min_recipients", "min_volume", "coordinator_seed_reach", "min_neighbor_clusters", "min_betweenness"];
+  if (!Array.isArray(data.sensitivity) || data.sensitivity.length !== 3) return fail();
+  for (const [i, s] of data.sensitivity.entries()) {
+    const factor = [0.9, 1, 1.1][i];
+    if (!object(s) || s.id !== scenarioIds[i] || s.factor !== factor || !object(s.thresholds)) return fail();
+    for (const [key, v] of Object.entries(data.meta.config.thresholds)) {
+      const expected = v * (varied.includes(key) ? factor : 1);
+      if (!numeric(s.thresholds[key]) || Math.abs(s.thresholds[key] - expected) > 1e-12 * Math.max(1, expected)) return fail();
+    }
+  }
   const ids = new Set<string>();
   for (const n of data.nodes) {
     if (
@@ -227,6 +251,12 @@ export function validateAnalysis(value: unknown): Analysis {
     )
       return fail();
     for (const role of roles) if (!numeric(n.role_scores[role])) return fail();
+    if (!Array.isArray(n.role_sensitivity) || n.role_sensitivity.length !== 3) return fail();
+    for (const [i, s] of n.role_sensitivity.entries())
+      if (!object(s) || s.scenario !== scenarioIds[i] || !roles.includes(s.role) || !numeric(s.role_score)
+          || s.role_score < 0 || s.role_score > 1 || !Array.isArray(s.reasons) || !s.reasons.length
+          || !s.reasons.every((r) => typeof r === "string" && r.length > 0)) return fail();
+    if (n.role_sensitivity[1].role !== n.role || Math.abs(n.role_sensitivity[1].role_score - n.role_score) > 1e-12) return fail();
     for (const key of [
       "pass_through",
       "in_concentration",
@@ -236,6 +266,7 @@ export function validateAnalysis(value: unknown): Analysis {
     ids.add(n.gid);
   }
   const edgeIds = new Set<string>();
+  const operationIds = new Set<number>();
   for (const e of data.edges) {
     if (
       !object(e) ||
@@ -257,8 +288,18 @@ export function validateAnalysis(value: unknown): Analysis {
       )
     )
       return fail();
+    if (!Array.isArray(e.operations) || e.operations.length !== e.n_tx) return fail();
+    for (const op of e.operations) {
+      if (!object(op) || !Number.isSafeInteger(op.index) || op.index < 0 || operationIds.has(op.index)
+          || !e.dates.includes(op.date) || !numeric(op.sum_kzt) || op.sum_kzt < 5000) return fail();
+      operationIds.add(op.index);
+    }
+    const total = e.operations.reduce((sum, op) => sum + op.sum_kzt, 0);
+    if (Math.abs(total - e.sum_kzt) > 0.01 + Math.abs(e.sum_kzt) * 1e-10
+        || new Set(e.operations.map((op) => op.date)).size !== e.dates.length) return fail();
     edgeIds.add(e.id);
   }
+  if (operationIds.size !== data.meta.n_transactions || [...operationIds].some((id) => id >= operationIds.size)) return fail();
   const edgePairs = new Set(data.edges.map((e) => `${e.src}:${e.dst}`));
   const seeds = new Set(data.nodes.filter((n) => n.is_seed).map((n) => n.gid));
   for (const n of data.nodes) {

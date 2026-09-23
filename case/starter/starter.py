@@ -20,7 +20,7 @@ import tempfile
 import time
 import tomllib
 
-from scoring import score_nodes
+from scoring import score_nodes, role_sensitivity, SENSITIVITY_KEYS
 from pathlib import Path
 
 import numpy as np
@@ -341,8 +341,15 @@ def write_outputs(df, edges, nodes, tx, config, resilience, out_dir):
         pair: sorted({day.date().isoformat() for day in group.date})
         for pair, group in tx.groupby(['src', 'dst'])
     }
+    operations = {}
+    for index, row in enumerate(tx.itertuples(index=False)):
+        operations.setdefault((row.src, row.dst), []).append(
+            {'index': index, 'date': row.date.date().isoformat(), 'sum_kzt': float(row.sum_kzt)})
+    scenarios, sensitivity = role_sensitivity(df, config)
+    for record in node_records:
+        record['role_sensitivity'] = sensitivity[record['gid']]
     result = dict(
-        schema_version=2,
+        schema_version=3,
         meta=dict(period_start=str(tx.date.min().date()), period_end=str(tx.date.max().date()),
                   n_nodes=len(nodes), n_edges=len(edges), n_transactions=len(tx),
                   rules_version=config['rules_version'], config=config,
@@ -350,9 +357,9 @@ def write_outputs(df, edges, nodes, tx, config, resilience, out_dir):
                                'Обход исходящих до depth=4; вход seed неполон', 'Оборот не равен уникальной денежной массе',
                                'Достижимость и близость дат не доказывают происхождение денег']),
         nodes=node_records,
-        edges=[dict(id=f'edge:{r.src}:{r.dst}', src=str(r.src), dst=str(r.dst), sum_kzt=float(r.sum_kzt), n_tx=int(r.n_tx), depth=int(r.depth), dates=edge_dates[(r.src, r.dst)])
+        edges=[dict(id=f'edge:{r.src}:{r.dst}', src=str(r.src), dst=str(r.dst), sum_kzt=float(r.sum_kzt), n_tx=int(r.n_tx), depth=int(r.depth), dates=edge_dates[(r.src, r.dst)], operations=operations[(r.src, r.dst)])
                for r in edges.sort_values(['src','dst']).itertuples()],
-        clusters=clusters, top_nodes=top_records, resilience=resilience,
+        clusters=clusters, top_nodes=top_records, resilience=resilience, sensitivity=scenarios,
     )
     validate_outputs(df, nodes, clusters, top, result)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -376,8 +383,9 @@ def write_outputs(df, edges, nodes, tx, config, resilience, out_dir):
 
 
 def validate_outputs(df, nodes, clusters, top, result):
-    if result['schema_version'] != 2:
+    if result['schema_version'] != 3:
         raise ValueError('Unsupported analysis schema')
+    operation_ids = []
     for edge in result['edges']:
         dates = edge.get('dates')
         if not isinstance(dates, list) or not dates or not all(isinstance(day, str) for day in dates):
@@ -387,6 +395,40 @@ def validate_outputs(df, nodes, clusters, top, result):
         for day in dates:
             if date.fromisoformat(day).isoformat() != day or not result['meta']['period_start'] <= day <= result['meta']['period_end']:
                 raise ValueError('Edge date is invalid or outside the observation period')
+        operations = edge.get('operations')
+        if not isinstance(operations, list) or len(operations) != edge['n_tx']:
+            raise ValueError('Operations disagree with transaction count')
+        for operation in operations:
+            if (not isinstance(operation, dict) or type(operation.get('index')) is not int
+                    or operation['index'] < 0 or operation.get('date') not in dates
+                    or type(operation.get('sum_kzt')) not in (int, float)
+                    or not np.isfinite(operation['sum_kzt']) or operation['sum_kzt'] < 5000):
+                raise ValueError('Invalid operation')
+            operation_ids.append(operation['index'])
+        if (sorted({op['date'] for op in operations}) != dates
+                or not np.isclose(sum(op['sum_kzt'] for op in operations), edge['sum_kzt'], rtol=1e-10, atol=0.01)):
+            raise ValueError('Operations disagree with edge dates or amount')
+    if sorted(operation_ids) != list(range(result['meta']['n_transactions'])):
+        raise ValueError('Operation indices must cover the source rows exactly once')
+    scenarios = result.get('sensitivity', [])
+    if [s.get('id') for s in scenarios] != ['lower', 'base', 'higher']:
+        raise ValueError('Missing sensitivity scenarios')
+    for scenario, factor in zip(scenarios, [0.9, 1.0, 1.1]):
+        expected_thresholds = {key: value * factor if key in SENSITIVITY_KEYS else value
+                               for key, value in result['meta']['config']['thresholds'].items()}
+        if scenario.get('factor') != factor or scenario.get('thresholds') != expected_thresholds:
+            raise ValueError('Invalid sensitivity thresholds')
+    for node in result['nodes']:
+        variants = node.get('role_sensitivity', [])
+        if [s.get('scenario') for s in variants] != ['lower', 'base', 'higher']:
+            raise ValueError('Missing node sensitivity')
+        for variant in variants:
+            if (variant.get('role') not in ROLES or not isinstance(variant.get('role_score'), (int, float))
+                    or not 0 <= variant['role_score'] <= 1 or not isinstance(variant.get('reasons'), list)
+                    or not variant['reasons'] or not all(isinstance(s, str) and s for s in variant['reasons'])):
+                raise ValueError('Invalid sensitivity result')
+        if variants[1]['role'] != node['role'] or not np.isclose(variants[1]['role_score'], node['role_score']):
+            raise ValueError('Base sensitivity disagrees with the assigned role')
     required = ['gid', 'role', 'role_score', 'cluster_id', 'priority_score',
                 'evidence', 'next_check', 'seed_path_gids']
     if df[required].isna().any().any() or df.gid.duplicated().any() or set(df.gid) != set(nodes.gid):

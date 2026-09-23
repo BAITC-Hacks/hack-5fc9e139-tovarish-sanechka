@@ -88,7 +88,7 @@ def test_exports_contract_and_repeatability(tmp_path):
     assert all(isinstance(n['gid'],str) for n in result['nodes'])
     assert {n['gid'] for n in result['nodes']} == set(pd.read_parquet(ROOT/'case/data/nodes.parquet').gid.astype(str))
     assert all(isinstance(e['src'],str) and isinstance(e['dst'],str) for e in result['edges'])
-    assert result['schema_version'] == 2
+    assert result['schema_version'] == 3
     transactions = pd.read_parquet(ROOT/'case/data/transactions.parquet')
     expected_dates = {
         (str(src), str(dst)): sorted({str(day)[:10] for day in group.date})
@@ -150,3 +150,36 @@ def test_output_lock_is_held_during_ready_callback(tmp_path):
             analyze(ROOT/'case/data', destination, ROOT/'config.toml')
     analyze(ROOT/'case/data', destination, ROOT/'config.toml', on_ready=on_ready)
     assert called == [2248]
+
+
+def test_sensitivity_uses_exact_thresholds_and_preserves_priority(config):
+    from scoring import role_sensitivity
+    frame = observed(is_seed=True, reachable_seed_count=9, neighbor_cluster_count=2,
+                     betweenness=config['thresholds']['min_betweenness'])
+    before = score_nodes(frame, config)
+    scenarios, results = role_sensitivity(frame, config)
+    assert scenarios[2]['thresholds']['coordinator_seed_reach'] == 9.9
+    assert scenarios[2]['thresholds']['min_seed_reach'] == 2
+    low, base, high = results['1']
+    assert low['role'] == base['role'] == 'coordinator'
+    assert high['role'] == 'peripheral'
+    assert any('целое ≥10' in reason for reason in high['reasons'])
+    assert before.equals(score_nodes(frame, config))
+    assert base['role_score'] == before.iloc[0].role_score
+
+
+def test_operation_contract_rejects_corruption(tmp_path):
+    from copy import deepcopy
+    result = analyze(ROOT/'case/data', tmp_path/'out', ROOT/'config.toml')
+    nodes = pd.read_csv(tmp_path/'out/nodes_roles.csv')
+    nodes['seed_path_gids'] = nodes.seed_path_gids.map(json.loads)
+    top = pd.read_csv(tmp_path/'out/top_nodes.csv')
+    for change in ['amount', 'index', 'count', 'scenario']:
+        invalid = deepcopy(result)
+        op = invalid['edges'][0]['operations'][0]
+        if change == 'amount': op['sum_kzt'] += 100
+        if change == 'index': op['index'] = -1
+        if change == 'count': invalid['edges'][0]['operations'] = []
+        if change == 'scenario': invalid['nodes'][0]['role_sensitivity'][1]['role'] = 'unknown'
+        with pytest.raises(ValueError):
+            validate_outputs(nodes, nodes, result['clusters'], top, invalid)

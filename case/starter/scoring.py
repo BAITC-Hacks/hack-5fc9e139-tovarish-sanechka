@@ -6,6 +6,67 @@
 # подкрепляя высокую оценку конкретными решениями из этого модуля.
 
 import numpy as np
+from math import ceil
+
+
+SENSITIVITY_KEYS = ('min_payers', 'min_recipients', 'min_volume',
+                    'coordinator_seed_reach', 'min_neighbor_clusters', 'min_betweenness')
+COUNT_THRESHOLDS = {'min_payers', 'min_recipients', 'coordinator_seed_reach', 'min_neighbor_clusters'}
+THRESHOLD_LABELS = {
+    'min_payers': 'Число плательщиков', 'min_recipients': 'Число получателей',
+    'min_volume': 'Объём, ₸', 'coordinator_seed_reach': 'Охват исходных клиентов',
+    'min_neighbor_clusters': 'Соседние кластеры', 'min_betweenness': 'Участие в маршрутах',
+}
+
+
+def threshold_checks(r, t):
+    """The varied gates are shared by scoring and scenario explanations."""
+    values = {
+        'consolidator': {'min_payers': r.in_deg},
+        'distributor': {'min_recipients': r.out_deg},
+        'transit': {'min_volume': min(r.in_kzt, r.out_kzt)},
+        'terminal': {'min_volume': r.in_kzt},
+        'coordinator': {'coordinator_seed_reach': r.reachable_seed_count,
+                        'min_neighbor_clusters': r.neighbor_cluster_count,
+                        'min_betweenness': r.betweenness},
+    }
+    return {role: {key: (float(value), bool(value >= t[key])) for key, value in items.items()}
+            for role, items in values.items()}
+
+
+def role_sensitivity(features, config):
+    scenarios = []
+    results = {str(gid): [] for gid in features.gid}
+    baseline = score_nodes(features, config).set_index('gid')
+    for name, factor in [('lower', 0.9), ('base', 1.0), ('higher', 1.1)]:
+        thresholds = {**config['thresholds']}
+        for key in SENSITIVITY_KEYS:
+            thresholds[key] *= factor
+        scenario_config = {**config, 'thresholds': thresholds}
+        scored = score_nodes(features, scenario_config).set_index('gid')
+        scenarios.append({'id': name, 'factor': factor, 'thresholds': thresholds})
+        for row in features.itertuples():
+            before, after = baseline.loc[row.gid], scored.loc[row.gid]
+            old_checks = threshold_checks(row, config['thresholds'])
+            new_checks = threshold_checks(row, thresholds)
+            reasons = []
+            for role in config['role_order']:
+                if role not in {before.role, after.role}:
+                    continue
+                for key, (value, passed) in new_checks.get(role, {}).items():
+                    if passed != old_checks[role][key][1]:
+                        required = f' (нужно целое ≥{ceil(thresholds[key])})' if key in COUNT_THRESHOLDS else ''
+                        reasons.append(f'{role}: {THRESHOLD_LABELS[key]} {value:g}; порог ≥{thresholds[key]:g}{required}; '
+                                       + ('условие выполнено.' if passed else 'условие не выполнено.'))
+            if before.role != after.role and not reasons:
+                reasons.append(f'Сменился победитель среди допустимых ролей: {before.role} → {after.role}. '
+                               f'Исходные баллы в сценарии: {before.role}={after.role_scores[before.role]:.6f}, '
+                               f'{after.role}={after.role_scores[after.role]:.6f}; равенство разрешается порядком ролей.')
+            if not reasons:
+                reasons.append('Базовые пороги.' if name == 'base' else 'Основная роль сохранилась при изменении шести порогов.')
+            results[str(row.gid)].append({'scenario': name, 'role': after.role,
+                                         'role_score': float(after.role_score), 'reasons': reasons})
+    return scenarios, results
 
 
 def normalize(values):
@@ -25,19 +86,20 @@ def score_nodes(df, config):
     for r in df.itertuples():
         scores = {role: 0.0 for role in config['role_order']}
         reasons = {}
-        if r.in_deg >= t['min_payers'] and r.reachable_seed_count >= t['min_seed_reach'] and r.in_concentration <= t['max_concentration']:
+        checks = threshold_checks(r, t)
+        if checks['consolidator']['min_payers'][1] and r.reachable_seed_count >= t['min_seed_reach'] and r.in_concentration <= t['max_concentration']:
             scores['consolidator'] = 0.6 + 0.2 * min(r.in_deg / (2*t['min_payers']), 1) + 0.2*(1-r.in_concentration)
             reasons['consolidator'] = f'сбор: {r.in_deg} плательщиков, seed={r.reachable_seed_count}, макс. доля={r.in_concentration:.0%}'
-        if r.out_deg >= t['min_recipients'] and r.out_concentration <= t['max_concentration']:
+        if checks['distributor']['min_recipients'][1] and r.out_concentration <= t['max_concentration']:
             scores['distributor'] = 0.6 + 0.2 * min(r.out_deg / (2*t['min_recipients']), 1) + 0.2*(1-r.out_concentration)
             reasons['distributor'] = f'распределение: {r.out_deg} получателей, макс. доля={r.out_concentration:.0%}'
-        if not r.is_seed and r.in_deg > 0 and r.out_deg > 0 and min(r.in_kzt,r.out_kzt) >= t['min_volume'] and t['transit_ratio_min'] <= r.pass_through <= t['transit_ratio_max'] and r.out_with_recent_in_share >= t['min_recent_in_share']:
+        if not r.is_seed and r.in_deg > 0 and r.out_deg > 0 and checks['transit']['min_volume'][1] and t['transit_ratio_min'] <= r.pass_through <= t['transit_ratio_max'] and r.out_with_recent_in_share >= t['min_recent_in_share']:
             scores['transit'] = 0.6 + 0.2 * min(r.pass_through,1/r.pass_through) + 0.2*r.out_with_recent_in_share
             reasons['transit'] = f'транзит: выход/вход={r.pass_through:.2f}, близость ≤2д={r.out_with_recent_in_share:.0%}; не трассировка'
-        if not r.is_seed and not r.truncated_by_depth and r.in_deg > 0 and r.in_kzt >= t['min_volume'] and r.pass_through <= t['terminal_ratio_max']:
+        if not r.is_seed and not r.truncated_by_depth and r.in_deg > 0 and checks['terminal']['min_volume'][1] and r.pass_through <= t['terminal_ratio_max']:
             scores['terminal'] = 0.6 + 0.2*(1-r.pass_through) + 0.2*min(r.in_kzt/(2*t['min_volume']),1)
             reasons['terminal'] = f'удержание в выборке: вход={r.in_kzt:.0f} ₸, выход/вход={r.pass_through:.2f}'
-        if r.reachable_seed_count >= t['coordinator_seed_reach'] and r.neighbor_cluster_count >= t['min_neighbor_clusters'] and r.betweenness >= t['min_betweenness']:
+        if all(passed for _, passed in checks['coordinator'].values()):
             scores['coordinator'] = 0.6 + 0.2*min(r.betweenness/(2*t['min_betweenness']),1) + 0.2*min(r.neighbor_cluster_count/(2*t['min_neighbor_clusters']),1)
             reasons['coordinator'] = f'связующий: seed={r.reachable_seed_count}, внеш. кластеров={r.neighbor_cluster_count}, посредничество={r.betweenness:.4f}'
         eligible = [role for role in config['role_order'] if scores[role] > 0]
