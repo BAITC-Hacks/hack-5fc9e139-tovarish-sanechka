@@ -3,6 +3,7 @@
 
 import argparse
 from collections import deque
+from datetime import date
 import fcntl
 import json
 import os
@@ -329,8 +330,12 @@ def write_outputs(df, edges, nodes, tx, config, resilience, out_dir):
     top_records = top.to_dict(orient='records')
     for record in top_records:
         record['gid'] = str(record['gid'])
+    edge_dates = {
+        pair: sorted({day.date().isoformat() for day in group.date})
+        for pair, group in tx.groupby(['src', 'dst'])
+    }
     result = dict(
-        schema_version=1,
+        schema_version=2,
         meta=dict(period_start=str(tx.date.min().date()), period_end=str(tx.date.max().date()),
                   n_nodes=len(nodes), n_edges=len(edges), n_transactions=len(tx),
                   rules_version=config['rules_version'], config=config,
@@ -338,7 +343,7 @@ def write_outputs(df, edges, nodes, tx, config, resilience, out_dir):
                                'Обход исходящих до depth=4; вход seed неполон', 'Оборот не равен уникальной денежной массе',
                                'Достижимость и близость дат не доказывают происхождение денег']),
         nodes=node_records,
-        edges=[dict(id=f'edge:{r.src}:{r.dst}', src=str(r.src), dst=str(r.dst), sum_kzt=float(r.sum_kzt), n_tx=int(r.n_tx), depth=int(r.depth))
+        edges=[dict(id=f'edge:{r.src}:{r.dst}', src=str(r.src), dst=str(r.dst), sum_kzt=float(r.sum_kzt), n_tx=int(r.n_tx), depth=int(r.depth), dates=edge_dates[(r.src, r.dst)])
                for r in edges.sort_values(['src','dst']).itertuples()],
         clusters=clusters, top_nodes=top_records, resilience=resilience,
     )
@@ -364,6 +369,17 @@ def write_outputs(df, edges, nodes, tx, config, resilience, out_dir):
 
 
 def validate_outputs(df, nodes, clusters, top, result):
+    if result['schema_version'] != 2:
+        raise ValueError('Unsupported analysis schema')
+    for edge in result['edges']:
+        dates = edge.get('dates')
+        if not isinstance(dates, list) or not dates or not all(isinstance(day, str) for day in dates):
+            raise ValueError('Edge dates must be a nonempty list of dates')
+        if dates != sorted(set(dates)):
+            raise ValueError('Edge dates must be sorted and unique')
+        for day in dates:
+            if date.fromisoformat(day).isoformat() != day or not result['meta']['period_start'] <= day <= result['meta']['period_end']:
+                raise ValueError('Edge date is invalid or outside the observation period')
     required = ['gid', 'role', 'role_score', 'cluster_id', 'priority_score',
                 'evidence', 'next_check', 'seed_path_gids']
     if df[required].isna().any().any() or df.gid.duplicated().any() or set(df.gid) != set(nodes.gid):

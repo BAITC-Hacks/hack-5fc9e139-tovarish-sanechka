@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from scoring import normalize, score_nodes
-from starter import analyze
+from starter import analyze, validate_outputs
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -88,6 +88,15 @@ def test_exports_contract_and_repeatability(tmp_path):
     assert all(isinstance(n['gid'],str) for n in result['nodes'])
     assert {n['gid'] for n in result['nodes']} == set(pd.read_parquet(ROOT/'case/data/nodes.parquet').gid.astype(str))
     assert all(isinstance(e['src'],str) and isinstance(e['dst'],str) for e in result['edges'])
+    assert result['schema_version'] == 2
+    transactions = pd.read_parquet(ROOT/'case/data/transactions.parquet')
+    expected_dates = {
+        (str(src), str(dst)): sorted({str(day)[:10] for day in group.date})
+        for (src, dst), group in transactions.groupby(['src', 'dst'])
+    }
+    assert {(edge['src'], edge['dst']): edge['dates'] for edge in result['edges']} == expected_dates
+    for name in ['nodes_roles.csv', 'clusters.csv', 'top_nodes.csv']:
+        assert (first/name).read_bytes() == (ROOT/'submission'/name).read_bytes()
     assert all(isinstance(g,str) for c in result['clusters'] for g in c['top_gids'])
     assert nodes[['gid','role','role_score','priority_score','cluster_id','evidence']].notna().all().all()
     assert nodes.role_score.between(0,1).all() and nodes.priority_score.between(0,1).all()
@@ -102,6 +111,11 @@ def test_exports_contract_and_repeatability(tmp_path):
     assert np.isclose(nodes.priority_score, nodes.priority_seed_reach + nodes.priority_structure + nodes.priority_volume).all()
     assert result['resilience']['baseline_largest_component'] == 1877
     assert [s['removed_count'] for s in result['resilience']['scenarios']] == [5, 10, 20]
+    for dates in [None, [], ['2026-07-03', '2026-07-01'], ['2026-07-01'] * 2,
+                  ['2026-06-30'], ['2026-07-32'], ['20260701'], [20260701]]:
+        invalid = {**result, 'edges': [{**result['edges'][0], 'dates': dates}]}
+        with pytest.raises(ValueError):
+            validate_outputs(nodes, nodes, result['clusters'], top, invalid)
 
 
 def test_concurrent_output_is_rejected(tmp_path):

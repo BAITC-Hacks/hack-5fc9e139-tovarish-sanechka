@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { labels, number, percent, type Analysis, type Edge } from "./types";
+import { PathChronology } from "./PathChronology";
 
 type Parents = Map<string, string | null>;
 
@@ -153,22 +154,15 @@ export function ConvergenceSearch({
               <h3>Наблюдаемые пути к {active.gid}</h3>
               {seeds.map((seed, index) => {
                 const path = pathTo(result.parents[index], active.gid);
+                const edges = path.slice(1).map((dst, step) => {
+                  const edge = edgeByPair.get(`${path[step]}:${dst}`);
+                  if (!edge) throw new Error("Ребро пути отсутствует в графе");
+                  return edge;
+                });
                 return (
                   <div className="source-path" key={seed}>
                     <strong>От {seed} · шагов: {path.length - 1}</strong>
-                    <ol>
-                      {path.slice(1).map((dst, step) => {
-                        const src = path[step];
-                        const edge = edgeByPair.get(`${src}:${dst}`);
-                        if (!edge) throw new Error("Ребро пути отсутствует в графе");
-                        return (
-                          <li key={`${src}:${dst}`}>
-                            <span>{src} → {dst}</span>
-                            <small>{number(edge.sum_kzt)} ₸ · {edge.n_tx} операций</small>
-                          </li>
-                        );
-                      })}
-                    </ol>
+                    <PathChronology edges={edges} onSelect={onSelect} />
                   </div>
                 );
               })}

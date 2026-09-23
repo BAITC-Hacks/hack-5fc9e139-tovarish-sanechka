@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { GraphView } from "./GraphView";
 import { ConvergenceSearch } from "./ConvergenceSearch";
+import { PathChronology } from "./PathChronology";
 import {
   validateAnalysis,
   labels,
@@ -519,22 +520,7 @@ export default function App() {
             <div className="path-details">
               <h3>Наблюдаемый путь от исходного узла</h3>
               {graphData.edges.length ? (
-                <ol>
-                  {graphData.edges.map((edge) => (
-                    <li key={edge.id}>
-                      <span className="path-step">
-                        <button className="link-button" onClick={() => choose(edge.src)}>
-                          {edge.src}
-                        </button>
-                        <span aria-hidden="true">→</span>
-                        <button className="link-button" onClick={() => choose(edge.dst)}>
-                          {edge.dst}
-                        </button>
-                      </span>
-                      <span>{number(edge.sum_kzt)} ₸ · {edge.n_tx} операций</span>
-                    </li>
-                  ))}
-                </ol>
+                <PathChronology edges={graphData.edges} onSelect={choose} />
               ) : (
                 <p className="empty">
                   {node.is_seed

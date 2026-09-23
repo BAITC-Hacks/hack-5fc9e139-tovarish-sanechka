@@ -28,7 +28,7 @@ def check(base_url='http://127.0.0.1:8080', out_dir=Path('/app/out')):
         if hashlib.sha256(contents[name]).hexdigest() != digest:
             raise ValueError(f'Published file differs from validated result: {name}')
     data = json.loads(contents['analysis.json'])
-    if data['schema_version'] != 1 or len(data['nodes']) != remote['n_nodes']:
+    if data['schema_version'] != 2 or len(data['nodes']) != remote['n_nodes']:
         raise ValueError('Invalid analysis schema or count')
     schemas = {
         'nodes_roles.csv': {'gid','role','role_score','cluster_id','priority_score','evidence'},

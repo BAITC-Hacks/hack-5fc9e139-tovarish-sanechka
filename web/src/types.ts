@@ -64,6 +64,7 @@ export interface Edge {
   sum_kzt: number;
   n_tx: number;
   depth: number;
+  dates: string[];
 }
 export interface Cluster {
   cluster_id: number;
@@ -74,7 +75,7 @@ export interface Cluster {
   hypothesis: string;
 }
 export interface Analysis {
-  schema_version: 1;
+  schema_version: 2;
   meta: {
     n_nodes: number;
     n_edges: number;
@@ -113,14 +114,21 @@ const numeric = (v: unknown): v is number =>
   typeof v === "number" && Number.isFinite(v);
 const gid = (v: unknown): v is string =>
   typeof v === "string" && /^\d+$/.test(v);
+const calendarDate = (v: unknown): v is string => {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const timestamp = Date.parse(`${v}T00:00:00Z`);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === v;
+};
 export function validateAnalysis(value: unknown): Analysis {
   const fail = (): never => {
     throw new Error(
       "Файл результатов повреждён или имеет неподдерживаемый формат. Повторите расчёт приложения.",
     );
   };
-  if (!object(value) || value.schema_version !== 1 || !object(value.meta))
+  if (!object(value) || value.schema_version !== 2 || !object(value.meta))
     return fail();
+  if (!calendarDate(value.meta.period_start) || !calendarDate(value.meta.period_end) ||
+      value.meta.period_start > value.meta.period_end) return fail();
   for (const key of ["nodes", "edges", "clusters", "top_nodes"])
     if (!Array.isArray(value[key])) return fail();
   const data = value as unknown as Analysis;
@@ -193,7 +201,12 @@ export function validateAnalysis(value: unknown): Analysis {
       !ids.has(e.dst) ||
       !numeric(e.sum_kzt) ||
       !numeric(e.n_tx) ||
-      !numeric(e.depth)
+      !numeric(e.depth) ||
+      !Array.isArray(e.dates) ||
+      !e.dates.length ||
+      !e.dates.every((day, index) => calendarDate(day) &&
+        day >= data.meta.period_start && day <= data.meta.period_end &&
+        (index === 0 || e.dates[index - 1] < day))
     )
       return fail();
     edgeIds.add(e.id);

@@ -529,6 +529,14 @@ summary {
   padding-top: 12px;
   margin-top: 12px;
 }
+.path-chronology {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.path-chronology li > small {
+  display: block;
+  color: var(--muted);
+}
 .path-details h3 {
   font-size: 13px;
   margin: 0;
@@ -552,7 +560,7 @@ summary {
   display: inline-block;
   overflow-wrap: anywhere;
 }
-.path-details li > span:last-child {
+.path-chronology li > span:nth-child(2) {
   display: block;
   color: var(--muted);
 }
