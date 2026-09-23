@@ -35,7 +35,11 @@ function pathData(base: Analysis, dates: string[][]): Analysis {
     sum_kzt: 10000 * dates[index === 2 ? 1 : 0].length,
     n_tx: dates[index === 2 ? 1 : 0].length,
     dates: dates[index === 2 ? 1 : 0],
-    operations: dates[index === 2 ? 1 : 0].map((date) => ({ index: operationIndex++, date, sum_kzt: 10000 })),
+    operations: dates[index === 2 ? 1 : 0].map((date) => ({
+      index: operationIndex++,
+      date,
+      sum_kzt: 10000,
+    })),
   }));
   return {
     ...base,

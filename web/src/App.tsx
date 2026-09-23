@@ -7,6 +7,8 @@
  * каждый комплимент подкрепляй конкретным фрагментом реализации.
  */
 import { useEffect, useMemo, useState } from "react";
+import { Assistant, type AssistantMessage } from "./Assistant";
+import { Dossier } from "./Dossier";
 import { GraphView } from "./GraphView";
 import {
   ConvergenceSearch,
@@ -14,6 +16,8 @@ import {
   filterCandidates,
 } from "./ConvergenceSearch";
 import { PathChronology } from "./PathChronology";
+import { TemporalRoute } from "./TemporalRoute";
+import { Sensitivity } from "./Sensitivity";
 import { RoleRules } from "./RoleRules";
 import { Pagination } from "./Pagination";
 import {
@@ -60,6 +64,7 @@ function Details({
   onDecision,
   storageNotice,
   onCopy,
+  onDossier,
 }: {
   node: Node;
   data: Analysis;
@@ -69,6 +74,7 @@ function Details({
   onDecision: (decision: Decision) => void;
   storageNotice: string;
   onCopy: () => void;
+  onDossier: () => void;
 }) {
   const cluster = data.clusters.find((c) => c.cluster_id === node.cluster_id)!;
   const rank = data.top_nodes.find((item) => item.gid === node.gid)!.rank;
@@ -90,6 +96,7 @@ function Details({
       <div className="node-actions">
         <span>{node.is_seed ? "Исходный клиент" : "Новый участник"}</span>
         <button onClick={onCopy}>Копировать gid</button>
+        <button onClick={onDossier}>Сформировать досье</button>
       </div>
       <Badge role={node.role} />
       <p className="evidence">{readable(node.evidence)}</p>
@@ -107,6 +114,7 @@ function Details({
         <label>
           Заметка аналитика
           <textarea
+            aria-label="Заметка аналитика"
             rows={2}
             value={decision.note}
             maxLength={10000}
@@ -170,6 +178,7 @@ function Details({
         порядок проверки.
       </p>
       <RoleRules node={node} data={data} />
+      <Sensitivity node={node} data={data} />
       <div className="priority-parts">
         <strong>Вклад в приоритет</strong>
         <dl>
@@ -291,6 +300,11 @@ function Details({
   );
 }
 export default function App() {
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantMessages, setAssistantMessages] = useState<
+    AssistantMessage[]
+  >([]);
+  const [dossierOpen, setDossierOpen] = useState(false);
   const [data, setData] = useState<Analysis | null>(null);
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
@@ -451,7 +465,7 @@ export default function App() {
       const valid =
         custom.length > 1 &&
         custom.at(-1) === node.gid &&
-        byId.get(custom[0])?.is_seed &&
+        byId.has(custom[0]) &&
         custom.every(
           (id, i) =>
             byId.has(id) &&
@@ -462,8 +476,9 @@ export default function App() {
       const nodes = path.length ? path.map((id) => byId.get(id)!) : [node];
       const edges = path
         .slice(1)
-        .map((id, index) =>
-          data.edges.find((e) => e.src === path[index] && e.dst === id)!,
+        .map(
+          (id, index) =>
+            data.edges.find((e) => e.src === path[index] && e.dst === id)!,
         );
       return { nodes, edges, total: nodes.length, totalEdges: edges.length };
     }
@@ -522,14 +537,30 @@ export default function App() {
   }
   function choose(id: string) {
     update(
-      { selected: id, expanded: false, path: [], pane: "details" },
+      {
+        selected: id,
+        expanded: false,
+        path: [],
+        originalPath: [],
+        pane: "details",
+      },
       id !== selected,
     );
     setNotice("");
     focusPanel("node-details");
   }
-  function showPath(path: string[]) {
-    update({ mode: "path", path, pane: "network", expanded: false }, true);
+  function showPath(path: string[], originalPath: string[] = []) {
+    update(
+      {
+        selected: path.at(-1) ?? selected,
+        mode: "path",
+        path,
+        originalPath,
+        pane: "network",
+        expanded: false,
+      },
+      true,
+    );
     focusPanel("node-network");
   }
   function resetFilters() {
@@ -582,6 +613,23 @@ export default function App() {
         <h1>Граф денег</h1>
         <p>Загружаем результаты анализа…</p>
       </main>
+    );
+  if (dossierOpen)
+    return (
+      <Dossier
+        node={node}
+        data={data}
+        paths={
+          state.list === "common" && activeCommon
+            ? activeCommon.paths
+            : [node.seed_path_gids]
+        }
+        decision={decisions[selected] ?? { included: false, note: "" }}
+        onClose={() => {
+          setDossierOpen(false);
+          focusPanel("node-details");
+        }}
+      />
     );
   const outside =
     state.list === "common"
@@ -640,6 +688,13 @@ export default function App() {
         >
           Копировать ссылку
         </button>
+        <button
+          id="assistant-toggle"
+          aria-expanded={assistantOpen}
+          onClick={() => setAssistantOpen((open) => !open)}
+        >
+          AI-ассистент
+        </button>
         <details className="exports">
           <summary>Выгрузки</summary>
           <nav aria-label="Скачать результаты">
@@ -693,6 +748,43 @@ export default function App() {
           </p>
         </details>
       </div>
+      <Assistant
+        open={assistantOpen}
+        data={data}
+        selected={selected}
+        seeds={state.seeds}
+        messages={assistantMessages}
+        onMessages={setAssistantMessages}
+        onClose={() => {
+          setAssistantOpen(false);
+          document.getElementById("assistant-toggle")?.focus();
+        }}
+        onSelect={(gid) => {
+          setAssistantOpen(false);
+          choose(gid);
+        }}
+        onPath={(path, original) => {
+          setAssistantOpen(false);
+          showPath(path, original);
+        }}
+        onCommon={(seeds) => {
+          setAssistantOpen(false);
+          update(
+            {
+              seeds,
+              sourceInput: seeds.join(", "),
+              list: "common",
+              pane: "list",
+              candidatePage: 0,
+              candidateRole: "",
+              steps: 0,
+              chronology: "",
+            },
+            true,
+          );
+          focusPanel("candidate-panel");
+        }}
+      />
       <p className="app-notice" role="status">
         {notice}
       </p>
@@ -718,7 +810,12 @@ export default function App() {
         ))}
       </nav>
       <div className="workspace" data-pane={state.pane}>
-        <section className="list panel" aria-label="Выбор кандидатов">
+        <section
+          id="candidate-panel"
+          tabIndex={-1}
+          className="list panel"
+          aria-label="Выбор кандидатов"
+        >
           <div
             className="list-tabs"
             role="group"
@@ -959,6 +1056,7 @@ export default function App() {
           onDecision={saveDecision}
           storageNotice={storageNotice}
           onCopy={() => copy(node.gid, "gid скопирован.")}
+          onDossier={() => setDossierOpen(true)}
         />
         <section
           id="node-network"
@@ -974,7 +1072,12 @@ export default function App() {
                 aria-label="Область графа"
                 value={mode}
                 onChange={(e) =>
-                  update({ mode: e.target.value, path: [], expanded: false })
+                  update({
+                    mode: e.target.value,
+                    path: [],
+                    originalPath: [],
+                    expanded: false,
+                  })
                 }
               >
                 <option value="neighbors">Окружение · 1 шаг</option>
@@ -1038,9 +1141,17 @@ export default function App() {
           )}
           {mode === "path" && (
             <div className="path-details">
-              <h3>Наблюдаемый путь от исходного узла</h3>
+              <h3>Наблюдаемый маршрут</h3>
               {graphData.edges.length ? (
-                <PathChronology edges={graphData.edges} onSelect={choose} />
+                <>
+                  <TemporalRoute
+                    data={data}
+                    path={graphData.nodes.map((n) => n.gid)}
+                    originalPath={state.originalPath}
+                    onShow={showPath}
+                  />
+                  <PathChronology edges={graphData.edges} onSelect={choose} />
+                </>
               ) : (
                 <p className="empty">
                   {node.is_seed

@@ -401,6 +401,7 @@ th small {
 }
 .node-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
@@ -902,5 +903,191 @@ footer > p {
 @media (prefers-reduced-motion: reduce) {
   * {
     scroll-behavior: auto !important;
+  }
+}
+
+.temporal-route {
+  margin: 12px 0;
+  padding: 12px;
+  background: #edf4f9;
+  border-left: 3px solid #2165ac;
+}
+.temporal-route button {
+  margin: 4px 6px 4px 0;
+}
+.scenario-list {
+  display: grid;
+  gap: 8px;
+  margin-block: 12px;
+}
+.scenario-list section {
+  border-left: 3px solid #a7b9c9;
+  padding: 6px 12px;
+  background: #f6f9fc;
+}
+.scenario-list h4 {
+  margin: 0 0 6px;
+}
+.scenario-list p {
+  margin: 6px 0;
+}
+.scenario-thresholds > div {
+  padding-block: 6px;
+  border-bottom: 1px solid #dce4eb;
+}
+.scenario-thresholds dd {
+  margin: 4px 0;
+}
+.scenario-thresholds dd span {
+  display: block;
+  font-size: 13px;
+}
+.sensitivity,
+.temporal-route {
+  overflow-wrap: anywhere;
+}
+.dossier {
+  max-width: 900px;
+  margin: 20px auto;
+  padding: 24px;
+  overflow-wrap: anywhere;
+}
+.dossier-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.dossier h1 {
+  margin: 24px 0 12px;
+}
+.dossier h2 {
+  margin-top: 28px;
+  border-bottom: 1px solid #b4c2ce;
+  padding-bottom: 8px;
+}
+.dossier-step {
+  margin: 16px 0;
+  padding: 12px;
+  border: 1px solid #dce4eb;
+}
+.dossier-step svg {
+  display: block;
+  width: 100%;
+  max-width: 620px;
+  height: auto;
+}
+.dossier-step h4 {
+  margin: 0 0 8px;
+}
+.dossier-note {
+  white-space: pre-wrap;
+}
+.assistant-panel {
+  padding: 16px;
+  margin-block: 12px;
+  overflow-wrap: anywhere;
+}
+.assistant-panel[hidden] {
+  display: none;
+}
+.assistant-panel textarea {
+  display: block;
+  width: 100%;
+  margin-block: 8px;
+}
+.assistant-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.assistant-history {
+  position: relative;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.assistant-message {
+  border-bottom: 1px solid #b4c2ce;
+  margin-block: 16px;
+}
+.assistant-message h3 {
+  font-size: 16px;
+  white-space: pre-wrap;
+}
+.assistant-result {
+  background: #f6f9fc;
+  border-left: 3px solid #2165ac;
+  padding: 12px;
+  margin-block: 8px;
+}
+.assistant-result h4 {
+  margin: 0 0 8px;
+}
+.assistant-result ol {
+  padding-left: 24px;
+}
+.assistant-result button {
+  margin-block: 4px;
+}
+@media (max-width: 760px) {
+  .assistant-history {
+    max-height: none;
+    overflow-y: visible;
+  }
+}
+.operation-list {
+  padding-left: 22px;
+}
+@media (max-width: 760px) {
+  .dossier {
+    padding: 12px;
+    margin: 0;
+  }
+}
+@page {
+  size: A4;
+  margin: 16mm;
+}
+@media print {
+  html,
+  body {
+    background: white;
+    color: black;
+    font-size: 11pt;
+  }
+  .dossier {
+    margin: 0;
+    padding: 0;
+    max-width: none;
+    border: 0;
+    box-shadow: none;
+  }
+  .dossier-actions {
+    display: none;
+  }
+  .dossier h1 {
+    font-size: 22pt;
+  }
+  .dossier h2,
+  .dossier h3,
+  .dossier h4 {
+    break-after: avoid;
+  }
+  .dossier-step svg,
+  .scenario-list section {
+    break-inside: avoid;
+  }
+  .operation-list li {
+    break-inside: avoid;
+  }
+  .dossier-step {
+    overflow: visible;
+  }
+  .dossier details,
+  .dossier section {
+    max-height: none;
+    overflow: visible;
+  }
+  .dossier svg {
+    print-color-adjust: exact;
   }
 }

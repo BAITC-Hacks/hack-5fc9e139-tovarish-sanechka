@@ -13,6 +13,7 @@ export const initialWorkspace = {
   descending: true,
   mode: "neighbors",
   path: [] as string[],
+  originalPath: [] as string[],
   expanded: false,
   list: "priority",
   pane: "list",

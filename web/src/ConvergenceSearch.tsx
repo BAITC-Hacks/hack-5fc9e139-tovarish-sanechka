@@ -1,96 +1,18 @@
 import { useMemo, useState } from "react";
-import {
-  labels,
-  number,
-  points,
-  roles,
-  type Analysis,
-  type Edge,
-} from "./types";
-import { checkPathChronology } from "./PathChronology";
+import { labels, number, points, roles, type Analysis } from "./types";
 import { Pagination } from "./Pagination";
 import { type Workspace } from "./workspace";
 
-type Parents = Map<string, string | null>;
-function shortestPaths(
-  seed: string,
-  adjacency: Map<string, string[]>,
-): Parents {
-  const parents: Parents = new Map([[seed, null]]);
-  const pending = [seed];
-  for (let index = 0; index < pending.length; index++) {
-    for (const next of adjacency.get(pending[index]) ?? []) {
-      if (parents.has(next)) continue;
-      parents.set(next, pending[index]);
-      pending.push(next);
-    }
-  }
-  return parents;
-}
-function pathTo(parents: Parents, target: string): string[] {
-  const path: string[] = [];
-  let current: string | null = target;
-  while (current !== null) {
-    path.push(current);
-    const previous: string | null | undefined = parents.get(current);
-    if (previous === undefined) throw new Error("Неполный путь в графе");
-    current = previous;
-  }
-  return path.reverse();
-}
+export { type CommonCandidate } from "./graphQueries";
+import { findCommonCandidates, type CommonCandidate } from "./graphQueries";
 
 export function useConvergence(data: Analysis | null, seeds: string[]) {
-  return useMemo(() => {
-    if (
-      !data ||
-      seeds.length < 2 ||
-      seeds.length > 5 ||
-      new Set(seeds).size !== seeds.length
-    )
-      return null;
-    const byId = new Map(data.nodes.map((node) => [node.gid, node]));
-    if (seeds.some((id) => !byId.get(id)?.is_seed)) return null;
-    const adjacency = new Map<string, string[]>();
-    const edgeByPair = new Map<string, Edge>();
-    for (const edge of data.edges) {
-      if (!adjacency.has(edge.src)) adjacency.set(edge.src, []);
-      adjacency.get(edge.src)!.push(edge.dst);
-      edgeByPair.set(`${edge.src}:${edge.dst}`, edge);
-    }
-    for (const targets of adjacency.values())
-      targets.sort((a, b) => a.length - b.length || a.localeCompare(b));
-    const parents = seeds.map((seed) => shortestPaths(seed, adjacency));
-    return data.top_nodes
-      .filter(
-        (item) =>
-          !byId.get(item.gid)!.is_seed && parents.every((p) => p.has(item.gid)),
-      )
-      .map((item) => {
-        const paths = parents.map((p) => pathTo(p, item.gid));
-        const edges = paths.map((path) =>
-          path
-            .slice(1)
-            .map((dst, step) => edgeByPair.get(`${path[step]}:${dst}`)!),
-        );
-        const statuses = edges.map((path) => checkPathChronology(path).status);
-        return {
-          ...item,
-          paths,
-          edges,
-          chronologies: statuses,
-          steps: Math.max(...paths.map((p) => p.length - 1)),
-          chronology: statuses.includes("inconsistent")
-            ? "inconsistent"
-            : statuses.includes("same_day")
-              ? "same_day"
-              : "ordered",
-        };
-      });
-  }, [data, seeds.join(",")]);
+  return useMemo(
+    () => findCommonCandidates(data, seeds),
+    [data, seeds.join(",")],
+  );
 }
-export type CommonCandidate = NonNullable<
-  ReturnType<typeof useConvergence>
->[number];
+
 export function filterCandidates(
   result: CommonCandidate[] | null,
   state: Workspace,
@@ -183,6 +105,7 @@ export function ConvergenceSearch({
         <label htmlFor="source-gids">
           Исходные gid
           <textarea
+            aria-label="Исходные gid"
             id="source-gids"
             value={state.sourceInput}
             onChange={(event) => update({ sourceInput: event.target.value })}
