@@ -106,3 +106,14 @@ def test_invalid_input_does_not_publish_results(tmp_path):
     with pytest.raises(ValueError, match='counts'):
         analyze(bad, tmp_path/'result', ROOT/'config.toml')
     assert not (tmp_path/'result').exists()
+
+
+def test_output_lock_is_held_during_ready_callback(tmp_path):
+    destination = tmp_path/'result'
+    called = []
+    def on_ready(result):
+        called.append(result['meta']['n_nodes'])
+        with pytest.raises(RuntimeError, match='already in use'):
+            analyze(ROOT/'case/data', destination, ROOT/'config.toml')
+    analyze(ROOT/'case/data', destination, ROOT/'config.toml', on_ready=on_ready)
+    assert called == [2248]

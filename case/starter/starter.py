@@ -290,7 +290,7 @@ def validate_outputs(df, nodes, clusters, top, result):
     json.dumps(result, allow_nan=False)
 
 
-def analyze(data_dir, out_dir, config_path):
+def analyze(data_dir, out_dir, config_path, on_ready=None):
     start = time.perf_counter()
     with Path(config_path).open('rb') as stream:
         config = tomllib.load(stream)
@@ -314,7 +314,9 @@ def analyze(data_dir, out_dir, config_path):
         features = assign_clusters(graph, features, config['random_seed'], config['resolution'])
         scored = score_nodes(features, config)
         result = write_outputs(scored, edges, nodes, tx, config, out_dir)
-    print(f'Analysis complete: {len(nodes)} nodes, {len(result["clusters"])} clusters, {time.perf_counter()-start:.3f} seconds')
+        print(f'Analysis complete: {len(nodes)} nodes, {len(result["clusters"])} clusters, {time.perf_counter()-start:.3f} seconds', flush=True)
+        if on_ready is not None:
+            on_ready(result)
     return result
 
 

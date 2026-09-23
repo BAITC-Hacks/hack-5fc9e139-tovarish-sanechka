@@ -99,3 +99,28 @@ test("malformed data is rejected", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("alert")).toContainText("повреждён");
 });
+
+test('cluster expansion, keyboard selection and all downloads', async ({page, request}) => {
+  const data = await (await request.get('/analysis.json')).json();
+  const cluster = data.clusters.find((c:any) => c.n_nodes > 80);
+  await page.goto('/');
+  await page.getByLabel('Найти узел по gid').fill(cluster.top_gids[0]);
+  await page.getByLabel('Найти узел по gid').press('Enter');
+  await expect(page.locator('.node-id')).toHaveText(cluster.top_gids[0]);
+  await page.getByLabel('Область графа').selectOption('cluster');
+  await expect(page.locator('.graph-status')).toContainText(`80 из ${cluster.n_nodes}`);
+  await page.getByRole('button', {name:'Показать всё', exact:true}).click();
+  await expect(page.locator('.graph-status')).toContainText(`${cluster.n_nodes} из ${cluster.n_nodes}`);
+  const first = page.locator('.gid-button').first();
+  await first.focus(); await page.keyboard.press('Enter');
+  await expect(page.locator('.node-id')).toHaveText(data.top_nodes[0].gid);
+  for (const name of ['nodes_roles','clusters','top_nodes']) {
+    const waiting=page.waitForEvent('download');
+    await page.getByRole('link', {name:`${name}.csv`}).click();
+    const download=await waiting;
+    expect(await download.failure()).toBeNull();
+    const response=await request.get(`/${name}.csv`);
+    expect(response.ok()).toBeTruthy();
+    expect((await response.text()).split('\n').length).toBeGreaterThan(20);
+  }
+});
