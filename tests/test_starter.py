@@ -72,3 +72,63 @@ def test_real_data_full_graph():
     features = basic_features(graph, nodes)
     assert features.truncated_by_depth.sum() == 444
     assert features.pagerank.sum() == pytest.approx(1)
+
+
+def test_reachability_counts_distinct_seeds_and_excludes_self():
+    from starter import extended_features
+    graph = nx.DiGraph()
+    graph.add_edges_from([(1, 2), (2, 1), (2, 4), (3, 4)])
+    nodes = pd.DataFrame({'gid': [1, 2, 3, 4], 'is_seed': [True, False, True, False],
+                          'depth': [0, 1, 0, 2]})
+    edges = pd.DataFrame([{'src': a, 'dst': b, 'sum_kzt': 5000., 'n_tx': 1, 'depth': 1}
+                          for a, b in graph.edges])
+    tx = edges[['src', 'dst', 'sum_kzt']].assign(date=pd.Timestamp('2026-07-01'))
+    graph = build_graph(edges, nodes)
+    features = extended_features(graph, basic_features(graph, nodes), tx).set_index('gid')
+    assert features.reachable_seed_count.to_dict() == {1: 0, 2: 1, 3: 0, 4: 2}
+
+
+def test_daily_proximity_does_not_count_outgoing_volume_twice():
+    from starter import extended_features
+    nodes = pd.DataFrame({'gid': [1, 2, 3], 'depth': [0, 1, 2], 'is_seed': [True, False, False]})
+    tx = pd.DataFrame({'src': [1, 1, 2, 2], 'dst': [2, 2, 3, 3],
+                       'date': pd.to_datetime(['2026-07-01', '2026-07-02', '2026-07-03', '2026-07-05']),
+                       'sum_kzt': [5000., 5000., 10000., 10000.]})
+    edges = tx.groupby(['src', 'dst']).agg(sum_kzt=('sum_kzt', 'sum'), n_tx=('sum_kzt', 'size')).reset_index().assign(depth=1)
+    graph = build_graph(edges, nodes)
+    features = extended_features(graph, basic_features(graph, nodes), tx).set_index('gid')
+    assert features.loc[2, 'out_with_recent_in_share'] == 0.5
+    assert features.loc[2, 'active_days'] == 4
+    assert features.loc[2, 'max_daily_payers'] == 1
+
+
+def test_cluster_projection_sums_reciprocals_ignores_loops(monkeypatch, sample):
+    from starter import assign_clusters
+    edges, nodes, _ = sample
+    graph = build_graph(edges, nodes)
+    graph.add_edge(2, 1, sum_kzt=5000., n_tx=1, depth=2)
+    seen = {}
+
+    def louvain(projection, **kwargs):
+        seen['graph'] = projection
+        return [{1, 2}]
+
+    monkeypatch.setattr(nx.community, 'louvain_communities', louvain)
+    features = assign_clusters(graph, basic_features(graph, nodes)).set_index('gid')
+    assert seen['graph'][1][2]['weight'] == 15000
+    assert not list(nx.selfloop_edges(seen['graph']))
+    assert features.cluster_id.to_dict() == {1: 0, 2: 0, 3: 1}
+
+
+def test_real_features_and_clusters_repeat():
+    from starter import assign_clusters, extended_features
+    edges, nodes, tx = load(Path(__file__).resolve().parents[1] / 'case/data')
+    graph = build_graph(edges, nodes)
+    features = extended_features(graph, basic_features(graph, nodes), tx)
+    first = assign_clusters(graph, features)
+    shuffled_graph = build_graph(edges.sample(frac=1, random_state=9), nodes.sample(frac=1, random_state=9))
+    second = assign_clusters(shuffled_graph, features)
+    pd.testing.assert_frame_equal(first, second)
+    assert first.cluster_id.nunique() == 88
+    assert first.out_with_recent_in_share.between(0, 1).all()
+    assert first.reachable_seed_count.between(0, nodes.is_seed.sum()).all()

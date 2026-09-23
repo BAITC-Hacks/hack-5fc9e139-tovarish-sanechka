@@ -135,6 +135,79 @@ def basic_features(G: nx.DiGraph, nodes: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def extended_features(G, df, tx):
+    """Observed structure and daily timing; no attribution of individual money."""
+    df = df.sort_values("gid").reset_index(drop=True).copy()
+    reach = dict.fromkeys(G, 0)
+    for seed in sorted(df.loc[df.is_seed, "gid"]):
+        for gid in nx.descendants(G, seed):
+            reach[gid] += 1
+    df["reachable_seed_count"] = df.gid.map(reach)
+    between = nx.betweenness_centrality(G, weight=None, normalized=True)
+    df["betweenness"] = df.gid.map(between)
+    for direction, endpoint in [("in", "dst"), ("out", "src")]:
+        totals = tx.groupby(endpoint).sum_kzt.sum()
+        pair_max = tx.groupby(["src", "dst"]).sum_kzt.sum().groupby(level=endpoint).max()
+        concentration = pair_max / totals
+        df[f"{direction}_concentration"] = df.gid.map(concentration)
+
+    # Exclude self-transfers from timing: they cannot establish onward transit.
+    external = tx.loc[tx.src != tx.dst]
+    daily_in = external.groupby(["dst", "date"]).sum_kzt.sum()
+    daily_out = external.groupby(["src", "date"]).sum_kzt.sum()
+    days = pd.date_range(tx.date.min(), tx.date.max(), freq="D")
+    incoming = daily_in.unstack(fill_value=0).reindex(index=df.gid, columns=days, fill_value=0)
+    outgoing = daily_out.unstack(fill_value=0).reindex(index=df.gid, columns=days, fill_value=0)
+    timing = []
+    for gid in df.gid:
+        ins = incoming.loc[gid].to_numpy(dtype=float)
+        outs = outgoing.loc[gid].to_numpy(dtype=float)
+        # Each outgoing day's volume is counted once, even if several preceding
+        # days contain incoming transfers. This is proximity, not flow matching.
+        recent_in = np.convolve(ins > 0, np.ones(3), mode="full")[:len(days)] > 0
+        near_volume = outs[recent_in].sum()
+        timing.append(float(near_volume / outs.sum()) if outs.sum() > 0 else 0.0)
+    df["out_with_recent_in_share"] = timing
+    active = pd.concat([external[["src", "date"]].rename(columns={"src": "gid"}),
+                        external[["dst", "date"]].rename(columns={"dst": "gid"})])
+    df["active_days"] = df.gid.map(active.groupby("gid").date.nunique()).fillna(0).astype(int)
+    synchronous = external.groupby(["dst", "date"]).src.nunique().groupby(level="dst").max()
+    df["max_daily_payers"] = df.gid.map(synchronous).fillna(0).astype(int)
+    df["data_warnings"] = [
+        (["seed_incomplete_incoming"] if r.is_seed else [])
+        + (["depth_boundary"] if r.truncated_by_depth else [])
+        + (["no_observed_transfers"] if r.in_tx + r.out_tx == 0 else [])
+        + ["sample_incomplete"] for r in df.itertuples()
+    ]
+    return df
+
+
+def assign_clusters(G, df, random_seed=42, resolution=1.0):
+    """Sum reciprocal amounts explicitly; self-transfers do not link communities."""
+    projection = nx.Graph()
+    projection.add_nodes_from(sorted(G))
+    for src, dst, edge in sorted(G.edges(data=True)):
+        if src != dst:
+            previous = projection.get_edge_data(src, dst, {}).get("weight", 0.0)
+            projection.add_edge(src, dst, weight=previous + edge["sum_kzt"])
+    isolates = sorted(nx.isolates(projection))
+    connected = projection.subgraph(sorted(set(projection) - set(isolates))).copy()
+    communities = nx.community.louvain_communities(
+        connected, weight="weight", seed=random_seed, resolution=resolution
+    ) if connected.number_of_edges() else []
+    communities.extend({gid} for gid in isolates)
+    communities.sort(key=min)
+    mapping = {gid: cluster for cluster, members in enumerate(communities) for gid in members}
+    df = df.copy()
+    df["cluster_id"] = df.gid.map(mapping).astype(int)
+    df["neighbor_cluster_count"] = [
+        len({mapping[other] for other in set(G.predecessors(gid)) | set(G.successors(gid))
+             if other != gid and mapping[other] != mapping[gid]})
+        for gid in df.gid
+    ]
+    return df
+
+
 # ---------------------------------------------------------------- выгрузки
 
 def write_outputs(df: pd.DataFrame, out_dir: Path):
@@ -198,7 +271,7 @@ def main():
     edges, nodes, tx = load(Path(a.data))
     sanity_check(edges, nodes, tx)
     G = build_graph(edges, nodes)
-    df = basic_features(G, nodes)
+    df = assign_clusters(G, extended_features(G, basic_features(G, nodes), tx))
     write_outputs(df, Path(a.out))
     hints(G, df)
 
